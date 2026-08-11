@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.mcp_auth/
+.env
+webhook_receiver/data/
+
+# Tooling interno / memoria de agentes - fora do que os avaliadores do hackathon veem
+_sdds_private/
+.sdds/
+.claude/
+.agents/
+.cursor/
