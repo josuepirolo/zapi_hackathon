@@ -32,7 +32,7 @@ logger = logging.getLogger("delega.webhook_receiver")
 DATA_DIR = Path(__file__).resolve().parent / "data"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 
-SENSITIVE_HEADERS = {"authorization", "client-token", "cookie"}
+SENSITIVE_HEADERS = {"authorization", "client-token", "cookie", "z-api-token"}
 
 app = FastAPI(title="DELEGA - Webhook Receiver (experimento Fase 0)")
 
