@@ -13,7 +13,9 @@
   container na porta 8010. TLS terminado no Cloudflare (proxied), origin em
   HTTP puro — **confirma que HTTPS na origin não é exigido**, só o endpoint
   público (via Cloudflare) precisa ser HTTPS.
-- Primeiro evento real capturado: 2026-08-11T04:33:20Z.
+- Primeiro evento real capturado: 2026-08-11T04:33:20Z (self-sync, `fromMe: true`).
+- Segundo evento real capturado: 2026-08-11T04:35:10Z (**terceiro externo real**,
+  `fromMe: false`) — fecha a validação do cenário que o DELEGA precisa.
 
 ## Como isso foi obtido
 
@@ -21,37 +23,41 @@
 via `logging`. Inspecionado via `docker logs delega-webhook-receiver` e
 `GET /webhooks/zapi/events` na VM.
 
-## Achado crítico #1: primeiro evento não foi de um terceiro externo
+## Achado crítico #1: primeiro evento foi self-sync, não terceiro — segundo evento fechou a validação
 
-O teste manual (usuário mandando mensagem "de fora") na prática capturou uma
+O primeiro teste (usuário mandando mensagem "de fora") na prática capturou uma
 mensagem que o **próprio usuário enviou pelo seu WhatsApp** (`fromMe: true`)
-para um contato/grupo chamado "Lekazis Marketing" — não uma resposta de um
-terceiro para o número da instância. O evento chegou porque o WhatsApp
-multi-device sincroniza as próprias mensagens enviadas para todos os
-dispositivos vinculados, incluindo a sessão da API.
+para um contato chamado "Lekazis Marketing" — não uma resposta de terceiro. O
+evento chegou porque o WhatsApp multi-device sincroniza as próprias mensagens
+enviadas para todos os dispositivos vinculados, incluindo a sessão da API.
 
-**Consequência:** ainda não validamos o caso real do DELEGA (participante
-externo, ex. oficina, respondendo à instância). Precisa de um teste
-adicional: um número que **não seja** o dono da instância mandando mensagem
-diretamente para o número conectado à instância, com `fromMe: false`.
+Um segundo teste, com uma pessoa genuinamente externa (não o dono da conta)
+mandando mensagem direto pro número da instância, confirmou o cenário real:
+`fromMe: false`, remetente e conteúdo corretos. **RESOLVIDO** — o loop
+completo (terceiro → WhatsApp → Z-API → webhook → DELEGA) está validado.
 
-## Achado crítico #2: `phone` nem sempre é um MSISDN simples
+## Achado crítico #2: `phone` só vem como `@lid` no cenário self-sync
 
-Diferente de todos os exemplos da doc pública (`phone: "5544999999999"`), o
-evento observado trouxe:
+No primeiro evento (self-sync, `fromMe: true`):
 
 ```json
 "phone": "51875353223224@lid",
 "chatLid": "51875353223224@lid"
 ```
 
-Formato `@lid` (Linked ID interno do WhatsApp), não um telefone. Isso é
-relevante para a correlação de conversa (seção 14 do PROJECT_CONTEXT.md): a
-lógica de correlação **não pode assumir que `phone` é sempre um número
-discável** — precisa tratar `@lid` como identificador válido também, ou
-normalizar antes de comparar com o que foi usado no `send-text` do MCP (que
-exige DDI+DDD+número). Ainda não confirmado se `@lid` aparece em mensagens de
-terceiros ou é específico desse cenário (self-sync).
+No segundo evento (terceiro real, `fromMe: false`):
+
+```json
+"phone": "554499670415",
+"chatLid": "115440265252930@lid"
+```
+
+**Confirmado:** para mensagem real de terceiro — o caso que importa pro
+DELEGA — `phone` vem como MSISDN normal (DDI+DDD+número), igual ao formato
+exigido pelo `send-text` do MCP. O formato `@lid` em `phone` parece
+específico do cenário de auto-sincronização (`fromMe: true`), onde `phone` e
+`chatLid` coincidem. `chatLid` como campo separado (`@lid`) aparece em ambos
+os casos e não deve ser usado para correlação — `phone` é o campo certo.
 
 ## Achado crítico #3: header `z-api-token` na requisição do webhook
 
@@ -102,6 +108,39 @@ de campo preservados exatamente como recebidos.
 }
 ```
 
+### Segundo payload real observado (sanitizado) — terceiro externo, `fromMe: false`
+
+```json
+{
+  "isStatusReply": false,
+  "chatLid": "<lid>@lid",
+  "connectedPhone": "<numero-da-instancia>",
+  "waitingMessage": false,
+  "isEdit": false,
+  "isGroup": false,
+  "isNewsletter": false,
+  "instanceId": "<instance-id>",
+  "messageId": "ACD4DFDFDCD8C4964CA48A71429F2914",
+  "phone": "<msisdn-do-terceiro>",
+  "fromMe": false,
+  "momment": 1786422957000,
+  "status": "RECEIVED",
+  "chatName": "<nome-do-contato>",
+  "senderPhoto": "<url>",
+  "senderName": "<nome-do-remetente>",
+  "photo": "<url>",
+  "broadcast": false,
+  "participantPhone": null,
+  "participantLid": null,
+  "forwarded": false,
+  "type": "ReceivedCallback",
+  "fromApi": false,
+  "text": {
+    "message": "Tetse"
+  }
+}
+```
+
 Headers HTTP relevantes recebidos junto (redigido: token trocado por
 placeholder no log real, mas visível cru no log do container — ver risco
 abaixo):
@@ -110,35 +149,31 @@ abaixo):
 z-api-token: <instance-token>
 server: Z-API
 origin: https://api.z-api.io
-user-agent: Mozilla/5.0 (iPad; ...) — UA fixo do client HTTP da Z-API, não é o
-  dispositivo do usuário
+user-agent: Mozilla/5.0 (...) — UA varia por evento (visto iPad Safari e
+  Android Chrome), parece ser um valor arbitrário do client HTTP da Z-API,
+  não o dispositivo real do remetente — não usar para nada funcional.
 ```
 
 ## Campos — classificação
 
 | Campo | Status | Observação |
 |---|---|---|
-| `messageId` | OBSERVADO | Presente, string única. Candidato natural a chave de idempotência. |
+| `messageId` | OBSERVADO | Presente, string única, em ambos os eventos. Candidato natural a chave de idempotência. |
 | `instanceId` | OBSERVADO | Bate com o `INSTANCE_ID` real da instância. |
-| `phone` | OBSERVADO (formato inesperado) | Veio como `@lid`, não MSISDN — ver achado #2. Formato MSISDN puro ainda **NÃO VALIDADO** (só documentado nos exemplos públicos). |
-| `fromMe` | OBSERVADO | `true` neste evento — o caso `false` (mensagem de terceiro) ainda **NÃO VALIDADO**. |
-| `isGroup` | OBSERVADO | `false`, consistente com o teste (chat 1:1). |
-| `momment` | OBSERVADO | Epoch ms. |
+| `phone` | OBSERVADO | MSISDN normal (DDI+DDD+número) em mensagem de terceiro real (`fromMe: false`) — o caso que importa pro DELEGA. Vira `@lid` só no cenário self-sync (`fromMe: true`). Ver achado #2. |
+| `fromMe` | OBSERVADO | Ambos os valores confirmados ao vivo: `true` (self-sync) e `false` (terceiro real). |
+| `isGroup` | OBSERVADO | `false` nos dois eventos (testes 1:1). Grupo ainda não testado. |
+| `momment` | OBSERVADO | Epoch ms, nos dois eventos. |
 | `text.message` | OBSERVADO | Conteúdo textual simples confere com a doc pública. |
 | `type` | OBSERVADO | Sempre `"ReceivedCallback"`, como documentado. |
-| Campos de reply/mensagem citada (`referencedMessage` etc.) | NÃO VALIDADO | Não presentes neste evento (mensagem não era resposta a nada). Documentado publicamente para reactions/polls/status-reply, não testado ao vivo ainda. |
-| Header `z-api-token` | OBSERVADO, NÃO DOCUMENTADO | Ver achado #3. |
+| Campos de reply/mensagem citada (`referencedMessage` etc.) | NÃO VALIDADO | Não presentes em nenhum dos dois eventos (nenhuma mensagem era resposta a algo). Documentado publicamente para reactions/polls/status-reply, não testado ao vivo ainda. |
+| Header `z-api-token` | OBSERVADO, NÃO DOCUMENTADO | Ver achado #3. Presente e consistente nos dois eventos. |
 
 ## Riscos / pendências abertas
 
-- **Falta o teste com terceiro real** (`fromMe: false`) — é o cenário que
-  efetivamente importa para o DELEGA. Próxima ação recomendada.
 - Log da aplicação (`webhook_receiver/app.py`) grava o header `z-api-token`
-  em texto puro no log do container (`docker logs`) — a lista
-  `SENSITIVE_HEADERS` só redige `authorization`/`client-token`/`cookie`,
-  não esse header específico. Ajustar antes de considerar o receiver
-  hardened (não é urgente para o experimento, mas não deve ir pra produto
-  sem correção).
-- Formato `@lid` em `phone` precisa ser investigado mais: acontece só em
-  contextos de self-sync, ou também em mensagens de terceiros? Isso muda a
-  estratégia de correlação de conversa.
+  em texto puro no log do container (`docker logs`) — **corrigido**:
+  `SENSITIVE_HEADERS` agora inclui `z-api-token` (commit `47cdeaa`). Falta
+  redeploy na VM (`docker compose up -d --build`) pra valer no ambiente real.
+- `isGroup: true` e campos de reply/citação ainda não testados ao vivo —
+  fora do caminho crítico do cenário de demo (troca de óleo é 1:1, sem reply).
