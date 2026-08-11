@@ -3,6 +3,8 @@ services:
     build: ./webhook_receiver
     container_name: delega-webhook-receiver
     restart: unless-stopped
+    environment:
+      - WEBHOOK_SHARED_SECRET=${WEBHOOK_SHARED_SECRET:?defina no .env da VM, nunca commitado}
     ports:
       - "8010:8000"
     volumes:
