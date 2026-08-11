@@ -4,6 +4,6 @@ services:
     container_name: delega-webhook-receiver
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8010:8000"
     volumes:
       - ./webhook_receiver/data:/app/data
