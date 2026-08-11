@@ -36,28 +36,47 @@ mandando mensagem direto pro número da instância, confirmou o cenário real:
 `fromMe: false`, remetente e conteúdo corretos. **RESOLVIDO** — o loop
 completo (terceiro → WhatsApp → Z-API → webhook → DELEGA) está validado.
 
-## Achado crítico #2: `phone` só vem como `@lid` no cenário self-sync
+## Achado crítico #2: `phone` pode vir como LID — não é específico de self-sync
 
-No primeiro evento (self-sync, `fromMe: true`):
+Hipótese inicial (revisada): achei que o `@lid` em `phone` fosse exclusivo do
+cenário self-sync. **Estava incompleto.** A doc oficial
+(`developer.z-api.io/tips/lid.md`, DOCUMENTADO) explica: LID (Linked ID) é o
+identificador de privacidade que o próprio WhatsApp usa para representar
+contatos **sem expor o número de telefone**, e pode aparecer no lugar do
+número pra **qualquer contato** que tenha essa configuração de privacidade
+ativa — não é algo que o DELEGA controla ou pode prever por tipo de evento.
+
+Segundo a doc oficial:
+- `phone` pode conter o número real OU o LID, dependendo da configuração de
+  privacidade de quem enviou — não dá pra assumir um formato fixo.
+- `chatLid` é o identificador **mais estável** recomendado pela própria
+  Z-API para identificar o contato — ele existe mesmo quando `phone` também
+  está disponível.
+- LID **não pode ser convertido de volta pra número de telefone** — a Z-API
+  não oferece esse mapeamento (é assim por design de privacidade).
+- Pra responder um contato que só tem LID, o MCP `send-text` aceita o LID
+  diretamente no parâmetro `phone` (ex.: `"phone": "999999999999999@lid"`).
+
+Nos dois eventos que capturamos:
 
 ```json
-"phone": "51875353223224@lid",
-"chatLid": "51875353223224@lid"
+// Evento 1 (self-sync, fromMe: true)
+"phone": "51875353223224@lid", "chatLid": "51875353223224@lid"
+
+// Evento 2 (terceiro real, fromMe: false)
+"phone": "554499670415", "chatLid": "115440265252930@lid"
 ```
 
-No segundo evento (terceiro real, `fromMe: false`):
+Os dois casos são consistentes com a doc: `chatLid` sempre presente e em
+formato `@lid`; `phone` variando entre número real e LID.
 
-```json
-"phone": "554499670415",
-"chatLid": "115440265252930@lid"
-```
-
-**Confirmado:** para mensagem real de terceiro — o caso que importa pro
-DELEGA — `phone` vem como MSISDN normal (DDI+DDD+número), igual ao formato
-exigido pelo `send-text` do MCP. O formato `@lid` em `phone` parece
-específico do cenário de auto-sincronização (`fromMe: true`), onde `phone` e
-`chatLid` coincidem. `chatLid` como campo separado (`@lid`) aparece em ambos
-os casos e não deve ser usado para correlação — `phone` é o campo certo.
+**Decisão de arquitetura para o DELEGA:** a correlação de conversa (seção 14
+do PROJECT_CONTEXT.md) deve usar **`chatLid` como chave primária**, não
+`phone` — exatamente como a Z-API recomenda ("armazene o LID no seu banco
+para manter consistência"). `phone`, quando vier como número real, pode ser
+guardado como dado auxiliar (ex. exibição pro usuário), mas não como chave de
+correlação, já que pode não estar disponível ou pode mudar de forma
+imprevisível para o mesmo contato.
 
 ## Achado crítico #3: header `z-api-token` na requisição do webhook
 
@@ -160,7 +179,8 @@ user-agent: Mozilla/5.0 (...) — UA varia por evento (visto iPad Safari e
 |---|---|---|
 | `messageId` | OBSERVADO | Presente, string única, em ambos os eventos. Candidato natural a chave de idempotência. |
 | `instanceId` | OBSERVADO | Bate com o `INSTANCE_ID` real da instância. |
-| `phone` | OBSERVADO | MSISDN normal (DDI+DDD+número) em mensagem de terceiro real (`fromMe: false`) — o caso que importa pro DELEGA. Vira `@lid` só no cenário self-sync (`fromMe: true`). Ver achado #2. |
+| `phone` | OBSERVADO + DOCUMENTADO | Pode conter MSISDN ou LID, dependendo da privacidade do remetente (confirmado em `tips/lid.md`) — **não usar como chave de correlação**. Ver achado #2. |
+| `chatLid` | OBSERVADO + DOCUMENTADO | Sempre presente, formato `@lid` estável nos dois eventos. Recomendado pela própria Z-API como identificador de correlação. Ver achado #2. |
 | `fromMe` | OBSERVADO | Ambos os valores confirmados ao vivo: `true` (self-sync) e `false` (terceiro real). |
 | `isGroup` | OBSERVADO | `false` nos dois eventos (testes 1:1). Grupo ainda não testado. |
 | `momment` | OBSERVADO | Epoch ms, nos dois eventos. |
