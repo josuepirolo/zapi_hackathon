@@ -4,10 +4,10 @@
 > receiver (`webhook_receiver/`), nunca o que a documentação pública apenas
 > sugere. Ver seção "Como isso foi obtido" para reprodução.
 
-- Endpoint configurado na instância: `update-webhook-received` (via API REST
-  `PUT /instances/{id}/token/{token}/update-webhook-received`, header
-  `Client-Token`) → aponta para
-  `https://desafiozapi.py.tec.br/webhooks/zapi/on-message-received`.
+- Endpoint atual (protegido por segredo no path, ver achado #4):
+  `https://desafiozapi.py.tec.br/webhooks/zapi/<segredo>/on-message-received`.
+  Configurado **manualmente pelo painel da Z-API** (Instância → Webhooks →
+  "Ao receber") — não via API REST, ver achado #4.
 - Infra: VM do usuário, Docker (`docker-compose.yml` na raiz), nginx
   (`nginx-prod.conf`) fazendo proxy de `desafiozapi.py.tec.br` (porta 80) pro
   container na porta 8010. TLS terminado no Cloudflare (proxied), origin em
@@ -16,6 +16,21 @@
 - Primeiro evento real capturado: 2026-08-11T04:33:20Z (self-sync, `fromMe: true`).
 - Segundo evento real capturado: 2026-08-11T04:35:10Z (**terceiro externo real**,
   `fromMe: false`) — fecha a validação do cenário que o DELEGA precisa.
+- Terceiro evento real capturado: 2026-08-11T05:01:11Z, já na URL protegida
+  (self-sync, mesma conversa do segundo evento — `chatLid` idêntico nos dois,
+  reforça ADR-0001: `chatLid` fica estável independente de quem fala).
+
+## Segurança do endpoint
+
+`POST .../on-message-received` e `GET .../events` inicialmente não tinham
+nenhuma proteção — qualquer um que descobrisse a URL podia forjar payloads ou
+ler dados capturados (nome, telefone, foto, conteúdo de mensagem). Corrigido
+exigindo um segredo aleatório (`WEBHOOK_SHARED_SECRET`) como segmento do
+path — a Z-API só permite configurar a URL do webhook (sem headers
+customizados, confirmado na collection oficial), então embutir o segredo na
+própria URL é o único jeito de validar a origem da chamada. Sem esse segredo
+configurado, a aplicação recusa subir (`webhook_receiver/app.py`, commit
+`9f46ba9`). Segredo real vive só no `.env` da VM, nunca no git.
 
 ## Como isso foi obtido
 
@@ -77,6 +92,35 @@ para manter consistência"). `phone`, quando vier como número real, pode ser
 guardado como dado auxiliar (ex. exibição pro usuário), mas não como chave de
 correlação, já que pode não estar disponível ou pode mudar de forma
 imprevisível para o mesmo contato.
+
+## Achado crítico #4: `PUT update-webhook-received` responde sucesso mas não persiste de forma confiável
+
+Ao proteger o endpoint com um segredo no path (ver seção de segurança
+abaixo), tentei reconfigurar a URL via
+`PUT /instances/{id}/token/{token}/update-webhook-received` — API REST
+clássica, mesma chamada que funcionou na primeira configuração. Resultado:
+
+- A chamada respondeu `200 {"value":true}` em **três tentativas diferentes**,
+  incluindo uma **depois de reiniciar a instância** via
+  `GET /instances/{id}/token/{token}/restart`.
+- Em nenhuma delas a mudança realmente aplicou: `docker logs` na VM mostrava
+  a Z-API continuando a chamar a URL **antiga** (sem segredo), recebendo
+  404 do nosso lado repetidamente.
+- Só funcionou configurando **manualmente pelo painel** da Z-API (campo
+  "Ao receber" da instância) — o mesmo valor, mesma URL, mesmo formato.
+
+**Conclusão:** `update-webhook-received` (API REST) não é confiável para
+atualizar um webhook já configurado, ao menos não nesta instância/cenário —
+o retorno HTTP não reflete o estado real persistido. Restart de instância
+não resolveu. **Recomendação:** para qualquer reconfiguração de webhook,
+usar o painel manualmente e não confiar cegamente no `200` da API REST;
+validar sempre com um teste real (mensagem + inspeção do log/`/events`), não
+com o código de resposta da chamada de configuração.
+
+**Impacto para o DELEGA:** se o produto algum dia precisar reconfigurar
+webhooks programaticamente (ex.: provisionar uma nova instância para um
+novo usuário), essa chamada específica não pode ser o único sinal de
+sucesso — precisa de uma validação end-to-end adicional.
 
 ## Achado crítico #3: header `z-api-token` na requisição do webhook
 
@@ -191,9 +235,8 @@ user-agent: Mozilla/5.0 (...) — UA varia por evento (visto iPad Safari e
 
 ## Riscos / pendências abertas
 
-- Log da aplicação (`webhook_receiver/app.py`) grava o header `z-api-token`
-  em texto puro no log do container (`docker logs`) — **corrigido**:
-  `SENSITIVE_HEADERS` agora inclui `z-api-token` (commit `47cdeaa`). Falta
-  redeploy na VM (`docker compose up -d --build`) pra valer no ambiente real.
+- `update-webhook-received` via API REST não é confiável para reconfigurar
+  um webhook já existente (achado #4) — usar painel manualmente e validar
+  com teste real, não com o `200` da chamada.
 - `isGroup: true` e campos de reply/citação ainda não testados ao vivo —
   fora do caminho crítico do cenário de demo (troca de óleo é 1:1, sem reply).
