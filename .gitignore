@@ -4,6 +4,7 @@ __pycache__/
 .mcp_auth/
 .env
 webhook_receiver/data/
+instance_data.txt
 
 # Tooling interno / memoria de agentes - fora do que os avaliadores do hackathon veem
 _sdds_private/
