@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .mcp_auth/
 .env
-webhook_receiver/data/
+data/
 instance_data.txt
 
 # Tooling interno / memoria de agentes - fora do que os avaliadores do hackathon veem
