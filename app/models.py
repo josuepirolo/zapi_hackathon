@@ -38,6 +38,11 @@ class Campaign(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     whatsapp_group_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # So responde/inicia consentimento se a mensagem de um contato novo
+    # contiver essa palavra (case-insensitive) - sem isso, QUALQUER mensagem
+    # de QUALQUER numero desconhecido virava convite automatico (incidente
+    # real: mensagens saindo pra contatos nao relacionados ao hackathon).
+    trigger_keyword: Mapped[str] = mapped_column(String, nullable=False)
     invitation_message: Mapped[str] = mapped_column(String, nullable=False)
     welcome_message: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
