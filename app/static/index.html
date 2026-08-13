@@ -156,6 +156,14 @@
         <button type="submit" id="content-submit">Enviar</button>
       </div>
     </form>
+
+    <hr style="border: none; border-top: 1px solid var(--border); margin: 18px 0;" />
+
+    <p class="muted" style="margin-top:0;">Gera uma imagem promocional com IA (prompt fixo) e envia pro grupo.</p>
+    <div class="row">
+      <input id="ai-image-caption" placeholder="Legenda (opcional)" style="flex:1;" />
+      <button type="button" id="ai-image-submit" class="secondary">Gerar e enviar imagem (IA)</button>
+    </div>
   </section>
 
 </main>
@@ -223,11 +231,14 @@ async function loadCampaigns(selectId) {
 function renderCampaignDetails(c) {
   const el = document.getElementById("campaign-details");
   const submitBtn = document.getElementById("content-submit");
+  const aiImageBtn = document.getElementById("ai-image-submit");
   if (!c) {
     el.innerHTML = "Nenhuma campanha selecionada.";
     submitBtn.disabled = true;
+    aiImageBtn.disabled = true;
     return;
   }
+  aiImageBtn.disabled = !c.whatsapp_group_id;
   const grupoStatus = c.whatsapp_group_id
     ? `<span class="badge ok">CRIADO</span>`
     : `<span class="badge warn">AGUARDANDO 1º ACEITE</span>`;
@@ -306,6 +317,29 @@ document.getElementById("content-form").addEventListener("submit", async (e) => 
     toast("Erro ao enviar: " + err.message, true);
   } finally {
     btn.disabled = false;
+  }
+});
+
+document.getElementById("ai-image-submit").addEventListener("click", async () => {
+  if (!selectedId) return;
+  const caption = document.getElementById("ai-image-caption").value;
+  const btn = document.getElementById("ai-image-submit");
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Gerando imagem…";
+  try {
+    await api(`/campaigns/${selectedId}/content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "ai_image", text: caption }),
+    });
+    toast("Imagem gerada e enviada.");
+    document.getElementById("ai-image-caption").value = "";
+  } catch (err) {
+    toast("Erro ao gerar/enviar imagem: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 });
 

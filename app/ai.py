@@ -1,4 +1,5 @@
-"""Interpretacao de intencao (SIM/NAO/linguagem natural) via OpenAI API.
+"""Interpretacao de intencao (SIM/NAO/linguagem natural) e geracao de imagem
+promocional via OpenAI API.
 
 Unico ponto de import do SDK da OpenAI do projeto - ver
 `.sdds/harness/consentimento-grupo.harness.md`, secao 8 (Centralizacao).
@@ -93,3 +94,36 @@ async def interpret_confirmation(texto: str) -> Confirmation:
         logger.warning("Resposta inesperada da OpenAI para interpret_confirmation: %r", raw)
         return "UNCLEAR"
     return raw  # type: ignore[return-value]
+
+
+# Prompt fixo e controlado (nao aceita input do usuario/webhook) - evita
+# prompt injection via geracao de imagem. Confirmado contra a doc oficial
+# da OpenAI (2026-08-13, developers.openai.com/api/docs/guides/image-generation)
+# antes de implementar: client.images.generate(model="gpt-image-2", ...,
+# response_format="b64_json") retorna base64 direto, sem precisar hospedar
+# a imagem em lugar nenhum - `send-image` do MCP aceita base64 no campo
+# `image`.
+_PROMO_IMAGE_PROMPT = (
+    "Banner promocional vibrante e moderno para um grupo de ofertas no "
+    "WhatsApp. Estilo flat design, cores vivas (verde e dourado), "
+    "elementos de compras/promocao, sem nenhum texto ou letras na imagem."
+)
+_IMAGE_MODEL = "gpt-image-2"
+
+
+async def generate_promo_image_base64() -> str | None:
+    """Gera a imagem promocional padrao e retorna como string base64
+    (`b64_json`), pronta pra usar direto no `send-image` do MCP.
+    `None` em qualquer falha - o chamador decide como reagir."""
+    try:
+        result = await _client.images.generate(
+            model=_IMAGE_MODEL,
+            prompt=_PROMO_IMAGE_PROMPT,
+            size="1024x1024",
+            quality="medium",
+            response_format="b64_json",
+        )
+        return result.data[0].b64_json
+    except Exception:
+        logger.exception("Falha ao gerar imagem promocional via OpenAI")
+        return None
