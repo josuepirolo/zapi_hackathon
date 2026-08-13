@@ -15,6 +15,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
+from app import mcp_client
 from app.admin_api import router as admin_router
 from app.db import init_models
 from app.webhook import router as webhook_router
@@ -38,6 +39,14 @@ app.include_router(admin_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/tools-usage")
+async def tools_usage() -> dict[str, bool]:
+    """Checklist de quais das 9 tools do MCP ja foram chamadas com sucesso
+    nesta execucao do processo - alimenta o painel (demonstra uso real do
+    MCP). Em memoria, reinicia com o container."""
+    return mcp_client.get_tool_usage()
 
 
 @app.get("/")

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import ai, mcp_client
 from app.db import get_session
-from app.models import Campaign, Contact
+from app.models import Campaign, Contact, MembershipStatus
 
 logger = logging.getLogger("delega.admin_api")
 
@@ -60,6 +60,7 @@ class ContactOut(BaseModel):
     consent_status: str
     membership_status: str
     removal_pending: bool
+    is_admin: bool
 
     model_config = {"from_attributes": True}
 
@@ -122,3 +123,100 @@ async def send_content(campaign_id: int, body: ContentCreate, session: AsyncSess
         result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": body.text})
 
     return {"status": "sent", "mcp_result": result}
+
+
+@router.delete("/{campaign_id}", status_code=204)
+async def delete_campaign(campaign_id: int, session: AsyncSession = Depends(get_session)) -> None:
+    """Apaga o registro da campanha e seus contatos - so o nosso rastreio,
+    nunca chama o MCP (nao existe tool pra apagar o grupo em si, ver
+    docs/zapi-mcp-capabilities.md). O grupo real no WhatsApp, se existir,
+    fica intacto/abandonado; a proxima campanha cria um grupo novo."""
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campanha nao encontrada")
+    result = await session.execute(select(Contact).where(Contact.campaign_id == campaign_id))
+    for contact in result.scalars().all():
+        await session.delete(contact)
+    await session.delete(campaign)
+    await session.commit()
+
+
+async def _get_contact_in_campaign(session: AsyncSession, campaign_id: int, contact_id: int) -> Contact:
+    contact = await session.get(Contact, contact_id)
+    if contact is None or contact.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Contato nao encontrado nesta campanha")
+    return contact
+
+
+@router.post("/{campaign_id}/contacts/{contact_id}/remove", response_model=ContactOut)
+async def remove_contact(
+    campaign_id: int, contact_id: int, session: AsyncSession = Depends(get_session)
+) -> Contact:
+    """Remocao disparada pelo admin - equivalente ao YES do fluxo
+    #sairgrupozapi (app/webhook.py), so que iniciada pelo painel em vez de
+    pelo proprio contato."""
+    contact = await _get_contact_in_campaign(session, campaign_id, contact_id)
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None or not campaign.whatsapp_group_id:
+        raise HTTPException(status_code=404, detail="Campanha sem grupo")
+    if contact.membership_status != MembershipStatus.ADDED:
+        raise HTTPException(status_code=409, detail="Contato nao esta no grupo")
+
+    target_phone = contact.phone or contact.chat_lid
+    result = await mcp_client.call_tool(
+        "group-remove-participant", {"groupId": campaign.whatsapp_group_id, "phones": [target_phone]}
+    )
+    if not mcp_client.tool_call_succeeded(result):
+        raise HTTPException(status_code=502, detail=f"MCP recusou a remocao: {result}")
+
+    contact.membership_status = MembershipStatus.REMOVED
+    contact.is_admin = False
+    await session.commit()
+    await session.refresh(contact)
+    return contact
+
+
+@router.post("/{campaign_id}/contacts/{contact_id}/promote", response_model=ContactOut)
+async def promote_contact(
+    campaign_id: int, contact_id: int, session: AsyncSession = Depends(get_session)
+) -> Contact:
+    contact = await _get_contact_in_campaign(session, campaign_id, contact_id)
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None or not campaign.whatsapp_group_id:
+        raise HTTPException(status_code=404, detail="Campanha sem grupo")
+    if contact.membership_status != MembershipStatus.ADDED:
+        raise HTTPException(status_code=409, detail="Contato precisa estar no grupo pra virar admin")
+
+    target_phone = contact.phone or contact.chat_lid
+    result = await mcp_client.call_tool(
+        "group-add-admin", {"groupId": campaign.whatsapp_group_id, "phones": [target_phone]}
+    )
+    if not mcp_client.tool_call_succeeded(result):
+        raise HTTPException(status_code=502, detail=f"MCP recusou a promocao: {result}")
+
+    contact.is_admin = True
+    await session.commit()
+    await session.refresh(contact)
+    return contact
+
+
+@router.post("/{campaign_id}/contacts/{contact_id}/demote", response_model=ContactOut)
+async def demote_contact(
+    campaign_id: int, contact_id: int, session: AsyncSession = Depends(get_session)
+) -> Contact:
+    contact = await _get_contact_in_campaign(session, campaign_id, contact_id)
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None or not campaign.whatsapp_group_id:
+        raise HTTPException(status_code=404, detail="Campanha sem grupo")
+
+    target_phone = contact.phone or contact.chat_lid
+    result = await mcp_client.call_tool(
+        "group-remove-admin", {"groupId": campaign.whatsapp_group_id, "phones": [target_phone]}
+    )
+    if not mcp_client.tool_call_succeeded(result):
+        raise HTTPException(status_code=502, detail=f"MCP recusou a remocao de admin: {result}")
+
+    contact.is_admin = False
+    await session.commit()
+    await session.refresh(contact)
+    return contact
