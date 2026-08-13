@@ -87,6 +87,12 @@ async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(
     return campaign
 
 
+@router.get("", response_model=list[CampaignOut])
+async def list_campaigns(session: AsyncSession = Depends(get_session)) -> list[Campaign]:
+    result = await session.execute(select(Campaign).order_by(Campaign.id.desc()))
+    return list(result.scalars().all())
+
+
 @router.get("/{campaign_id}/contacts", response_model=list[ContactOut])
 async def list_contacts(campaign_id: int, session: AsyncSession = Depends(get_session)) -> list[Contact]:
     result = await session.execute(select(Contact).where(Contact.campaign_id == campaign_id))

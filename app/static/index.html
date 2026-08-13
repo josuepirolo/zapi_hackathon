@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gestão de Grupo — WhatsApp</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --border: #e2e5ea;
+    --text: #1c2128;
+    --muted: #6b7280;
+    --accent: #1e7a4d;
+    --accent-bg: #e6f4ec;
+    --warn: #92660a;
+    --warn-bg: #fdf2dc;
+    --danger: #a3242a;
+    --danger-bg: #fbe9e9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card h2 {
+    margin: 0 0 14px;
+    font-size: 1rem;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, input, textarea, button {
+    font: inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+  }
+  input, textarea, select { width: 100%; }
+  textarea { resize: vertical; min-height: 60px; }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin: 10px 0 4px; }
+  label:first-child { margin-top: 0; }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    font-weight: 600;
+    padding: 9px 14px;
+  }
+  button:hover { opacity: 0.92; }
+  button.secondary { background: #fff; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .badge.ok { background: var(--accent-bg); color: var(--accent); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.danger { background: var(--danger-bg); color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+  .muted { color: var(--muted); font-size: 0.875rem; }
+  .status-line { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 4px; }
+  .status-line div { font-size: 0.875rem; }
+  .status-line b { display: block; font-size: 1.1rem; }
+  #toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: #fff; padding: 10px 16px; border-radius: 8px;
+    font-size: 0.875rem; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  #toast.show { opacity: 1; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 0.875rem; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Gestão de Grupo de WhatsApp</h1>
+  <p>Painel administrativo — DELEGA (Desafio MCP Z-API 2026)</p>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>Campanha</h2>
+    <div class="row">
+      <select id="campaign-select" style="flex: 1;"></select>
+    </div>
+    <div id="campaign-details" class="muted" style="margin-top: 10px;">Nenhuma campanha selecionada.</div>
+
+    <details style="margin-top: 14px;">
+      <summary>+ Nova campanha</summary>
+      <form id="new-campaign-form">
+        <label>Nome</label>
+        <input name="name" required />
+        <label>Descrição</label>
+        <input name="description" />
+        <label>Palavra-chave (só quem mandar essa palavra inicia o fluxo)</label>
+        <input name="trigger_keyword" required placeholder="ex.: #desafiozapi" />
+        <label>Mensagem de convite</label>
+        <textarea name="invitation_message" required></textarea>
+        <label>Mensagem de boas-vindas</label>
+        <textarea name="welcome_message" required></textarea>
+        <div class="row" style="margin-top: 12px;">
+          <button type="submit">Criar campanha</button>
+        </div>
+      </form>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Participantes</h2>
+    <table id="contacts-table">
+      <thead>
+        <tr><th>Contato</th><th>Telefone</th><th>Consentimento</th><th>Grupo</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p id="contacts-empty" class="muted" style="display:none;">Nenhum participante ainda.</p>
+  </section>
+
+  <section class="card">
+    <h2>Conteúdo</h2>
+    <p class="muted" style="margin-top:-6px;">Envia uma mensagem de texto pro grupo da campanha selecionada.</p>
+    <form id="content-form">
+      <textarea name="text" placeholder="Texto da mensagem" required></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <button type="submit" id="content-submit">Enviar</button>
+      </div>
+    </form>
+  </section>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+const API = "";
+let campaigns = [];
+let selectedId = null;
+
+function toast(msg, isError) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.background = isError ? "#a3242a" : "#1c2128";
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 3200);
+}
+
+async function api(path, opts) {
+  const res = await fetch(API + path, opts);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = JSON.stringify(await res.json()); } catch (e) {}
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function statusBadge(consent) {
+  if (consent === "ACCEPTED") return `<span class="badge ok">ACEITOU</span>`;
+  if (consent === "DECLINED") return `<span class="badge danger">RECUSOU</span>`;
+  return `<span class="badge warn">AGUARDANDO</span>`;
+}
+
+function membershipBadge(membership) {
+  if (membership === "ADDED") return `<span class="badge ok">NO GRUPO</span>`;
+  if (membership === "REMOVED") return `<span class="badge danger">REMOVIDO</span>`;
+  return `<span class="badge warn">—</span>`;
+}
+
+async function loadCampaigns(selectId) {
+  campaigns = await api("/campaigns");
+  const select = document.getElementById("campaign-select");
+  select.innerHTML = "";
+  if (campaigns.length === 0) {
+    select.innerHTML = `<option value="">Nenhuma campanha ainda</option>`;
+    selectedId = null;
+    renderCampaignDetails(null);
+    renderContacts([]);
+    return;
+  }
+  for (const c of campaigns) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  }
+  selectedId = selectId && campaigns.some(c => c.id === selectId) ? selectId : campaigns[0].id;
+  select.value = selectedId;
+  await onCampaignChange();
+}
+
+function renderCampaignDetails(c) {
+  const el = document.getElementById("campaign-details");
+  const submitBtn = document.getElementById("content-submit");
+  if (!c) {
+    el.innerHTML = "Nenhuma campanha selecionada.";
+    submitBtn.disabled = true;
+    return;
+  }
+  const grupoStatus = c.whatsapp_group_id
+    ? `<span class="badge ok">CRIADO</span>`
+    : `<span class="badge warn">AGUARDANDO 1º ACEITE</span>`;
+  el.innerHTML = `
+    <div class="status-line">
+      <div>Palavra-chave<br><b>${c.trigger_keyword}</b></div>
+      <div>Grupo WhatsApp<br><b>${grupoStatus}</b></div>
+    </div>
+    ${c.description ? `<div>${c.description}</div>` : ""}
+  `;
+  submitBtn.disabled = !c.whatsapp_group_id;
+}
+
+function renderContacts(contacts) {
+  const tbody = document.querySelector("#contacts-table tbody");
+  const empty = document.getElementById("contacts-empty");
+  tbody.innerHTML = "";
+  empty.style.display = contacts.length === 0 ? "block" : "none";
+  for (const contact of contacts) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${contact.name || contact.chat_lid}</td>
+      <td>${contact.phone || "—"}</td>
+      <td>${statusBadge(contact.consent_status)}</td>
+      <td>${membershipBadge(contact.membership_status)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function onCampaignChange() {
+  const c = campaigns.find(x => x.id === selectedId);
+  renderCampaignDetails(c);
+  const contacts = await api(`/campaigns/${selectedId}/contacts`);
+  renderContacts(contacts);
+}
+
+document.getElementById("campaign-select").addEventListener("change", async (e) => {
+  selectedId = Number(e.target.value);
+  await onCampaignChange();
+});
+
+document.getElementById("new-campaign-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const body = Object.fromEntries(new FormData(form).entries());
+  try {
+    const created = await api("/campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    toast(`Campanha "${created.name}" criada.`);
+    form.reset();
+    await loadCampaigns(created.id);
+  } catch (err) {
+    toast("Erro ao criar campanha: " + err.message, true);
+  }
+});
+
+document.getElementById("content-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!selectedId) return;
+  const text = new FormData(e.target).get("text");
+  const btn = document.getElementById("content-submit");
+  btn.disabled = true;
+  try {
+    await api(`/campaigns/${selectedId}/content`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "text", text }),
+    });
+    toast("Mensagem enviada.");
+    e.target.reset();
+  } catch (err) {
+    toast("Erro ao enviar: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+loadCampaigns().catch(err => toast("Erro ao carregar campanhas: " + err.message, true));
+</script>
+
+</body>
+</html>
