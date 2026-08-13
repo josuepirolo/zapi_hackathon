@@ -12,5 +12,5 @@ services:
     ports:
       - "127.0.0.1:8010:8000"
     volumes:
-      - ./data:/app/data
-      - ./.mcp_auth:/app/.mcp_auth
+      - /mnt/api-zapi-desafio-hackathon/data:/app/data
+      - /mnt/api-zapi-desafio-hackathon/mcp_auth:/app/.mcp_auth
