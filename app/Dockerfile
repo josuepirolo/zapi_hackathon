@@ -7,10 +7,18 @@ RUN pip install --no-cache-dir -r app/requirements.txt
 
 COPY app/ ./app/
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data /app/.mcp_auth \
-    && chown -R appuser:appuser /app
-USER appuser
+    && chown -R appuser:appuser /app \
+    && chmod +x /app/app/entrypoint.sh
+
+# Container inicia como root de proposito (nao troca USER aqui) - ver
+# entrypoint.sh: corrige a posse dos bind mounts e so entao baixa
+# privilegio pro appuser antes de executar o app.
+ENTRYPOINT ["/app/app/entrypoint.sh"]
 
 EXPOSE 8000
 
