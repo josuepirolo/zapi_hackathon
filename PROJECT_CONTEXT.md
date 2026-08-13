@@ -5,6 +5,28 @@
 
 ---
 
+# 0. ATUALIZAÇÃO DE ESCOPO (2026-08-11)
+
+O produto descrito neste documento (agente de delegação genérico, Task
+Engine amplo, cenário de demo "troca de óleo") foi **substituído** por um
+escopo mais estreito: **gestão de grupos de WhatsApp com consentimento**.
+
+Ver `docs/decisions/ADR-0002-pivot-grupo-whatsapp-consentimento.md` para o
+racional completo e o que muda.
+
+As seções abaixo sobre visão do produto, problema, tese, experiência
+desejada, conceito de Task, state machine ampla e cenário de demo (seções
+3–9 e 21–25) refletem o escopo **anterior** e ficam preservadas como
+histórico/contexto — não são mais a especificação vigente.
+
+**Continuam vigentes e não foram alteradas pelo pivot:** as seções sobre
+regras do MCP (10–12), human-in-the-loop (13, adaptado no ADR-0002 para o
+fluxo de consentimento binário), correlação de conversas (14, refinada pelo
+ADR-0001), idempotência (15), segurança (16), stack (17) e princípios de
+engenharia (18).
+
+---
+
 # 1. CONTEXTO
 
 Este projeto está sendo desenvolvido especificamente para o:

@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: delega-app
+    restart: unless-stopped
+    environment:
+      - WEBHOOK_SHARED_SECRET=${WEBHOOK_SHARED_SECRET:?defina no .env da VM, nunca commitado}
+      - OPENAPI_KEY=${OPENAPI_KEY:?defina no .env da VM, nunca commitado}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.mcp_auth:/app/.mcp_auth
