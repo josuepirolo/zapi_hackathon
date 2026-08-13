@@ -33,6 +33,11 @@ nova mensagem de um contato `ACCEPTED` com `membership_status=NONE`
 tenta de novo criar/adicionar ao grupo automaticamente - cobre tanto
 falha transitoria de MCP quanto registros antigos que ficaram
 inconsistentes numa versao anterior do codigo.
+
+Reentrada apos remocao (RN-010): contato `REMOVED` (saida voluntaria
+#sairgrupozapi ou removido pelo admin) ou `DECLINED` que manda mensagem
+com a `trigger_keyword` de novo reinicia o fluxo de consentimento
+(PENDING + convite) em vez de ser ignorado.
 """
 
 from __future__ import annotations
@@ -49,7 +54,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
-from app.ai import interpret_confirmation, interpret_intent
+from app.ai import generate_promo_image_base64, interpret_confirmation, interpret_intent
 from app.config import WEBHOOK_SHARED_SECRET
 from app.db import async_session
 from app.models import Campaign, ConsentStatus, Contact, MembershipStatus
@@ -156,6 +161,36 @@ async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool
     return True
 
 
+async def _send_group_welcome(campaign: Campaign) -> None:
+    """Boas-vindas no grupo ao aceitar: imagem gerada por IA em memoria
+    (base64) enviada via `send-image` do MCP — nunca hospedada em URL
+    publica. Legenda = `welcome_message` da campanha."""
+    if not campaign.whatsapp_group_id:
+        logger.warning("Campanha %s sem whatsapp_group_id - boas-vindas ao grupo ignorada.", campaign.id)
+        return
+    image_b64 = await generate_promo_image_base64()
+    if image_b64 is None:
+        logger.warning("Falha ao gerar imagem de boas-vindas - fallback send-text no grupo.")
+        try:
+            await mcp_client.call_tool(
+                "send-text", {"phone": campaign.whatsapp_group_id, "message": campaign.welcome_message}
+            )
+        except Exception:
+            logger.exception("Falha no fallback de boas-vindas via send-text no grupo %s", campaign.whatsapp_group_id)
+        return
+    try:
+        await mcp_client.call_tool(
+            "send-image",
+            {
+                "phone": campaign.whatsapp_group_id,
+                "image": image_b64,
+                "caption": campaign.welcome_message,
+            },
+        )
+    except Exception:
+        logger.exception("Falha ao enviar imagem de boas-vindas via MCP no grupo %s", campaign.whatsapp_group_id)
+
+
 async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:
     """Contato ja ACCEPTED mas nunca confirmado no grupo (ex.: MCP falhou
     na hora, ou o registro ficou de uma versao anterior do codigo que
@@ -164,10 +199,7 @@ async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campa
     intervencao manual no banco."""
     logger.info("Retentando adicao ao grupo para %s (ACCEPTED, membership_status=NONE).", contact.chat_lid)
     if await _ensure_group_membership(contact, campaign):
-        try:
-            await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": campaign.welcome_message})
-        except Exception:
-            logger.exception("Falha ao enviar mensagem de boas-vindas via MCP para %s", contact.chat_lid)
+        await _send_group_welcome(campaign)
     await session.commit()
 
 
@@ -239,6 +271,22 @@ async def _handle_removal_confirmation(session: AsyncSession, contact: Contact, 
     await session.commit()
 
 
+async def _handle_reentry(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:
+    """Contato REMOVED ou DECLINED pede entrada de novo via palavra-chave
+    (RN-010) — reinicia consentimento do zero, sem reutilizar aceite anterior."""
+    logger.info("Reentrada solicitada por %s (consent=%s, membership=%s).", contact.chat_lid, contact.consent_status, contact.membership_status)
+    contact.consent_status = ConsentStatus.PENDING
+    contact.membership_status = MembershipStatus.NONE
+    contact.removal_pending = False
+    contact.consent_at = None
+    contact.is_admin = False
+    try:
+        await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": campaign.invitation_message})
+    except Exception:
+        logger.exception("Falha ao reenviar convite via MCP para %s", contact.chat_lid)
+    await session.commit()
+
+
 async def _handle_pending_contact(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
     intent = await interpret_intent(texto)
 
@@ -248,10 +296,7 @@ async def _handle_pending_contact(session: AsyncSession, contact: Contact, campa
 
         contact.consent_status = ConsentStatus.ACCEPTED
         contact.consent_at = datetime.now(timezone.utc)
-        try:
-            await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": campaign.welcome_message})
-        except Exception:
-            logger.exception("Falha ao enviar mensagem de boas-vindas via MCP para %s", contact.chat_lid)
+        await _send_group_welcome(campaign)
 
     elif intent == "DECLINE":
         contact.consent_status = ConsentStatus.DECLINED
@@ -326,6 +371,12 @@ async def on_message_received(secret: str, request: Request) -> JSONResponse:
             campaign_result = await session.get(Campaign, contact.campaign_id)
             if campaign_result is not None:
                 await _retry_stuck_acceptance(session, contact, campaign_result)
+        elif (
+            contact.membership_status == MembershipStatus.REMOVED or contact.consent_status == ConsentStatus.DECLINED
+        ):
+            campaign_result = await session.get(Campaign, contact.campaign_id)
+            if campaign_result is not None and campaign_result.trigger_keyword.lower() in texto.lower():
+                await _handle_reentry(session, contact, campaign_result)
         else:
             logger.info(
                 "Mensagem de %s com consent_status=%s/membership_status=%s (fora do fluxo de consentimento) - ignorada.",

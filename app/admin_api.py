@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import ai, mcp_client
+from app import mcp_client
 from app.db import get_session
 from app.models import Campaign, Contact, MembershipStatus
 
@@ -66,11 +66,8 @@ class ContactOut(BaseModel):
 
 
 class ContentCreate(BaseModel):
-    kind: Literal["text", "ai_image"]
-    # Obrigatorio se kind == "text". Ignorado se kind == "ai_image" - o
-    # prompt da imagem e fixo (app.ai._PROMO_IMAGE_PROMPT), nao vem do
-    # usuario (evita prompt injection na geracao de imagem).
-    text: str | None = None
+    kind: Literal["text"] = "text"
+    text: str = Field(min_length=1)
 
 
 @router.post("", response_model=CampaignOut, status_code=201)
@@ -110,17 +107,7 @@ async def send_content(campaign_id: int, body: ContentCreate, session: AsyncSess
     if campaign is None or campaign.whatsapp_group_id is None:
         raise HTTPException(status_code=404, detail="Campanha ou grupo nao encontrado")
 
-    if body.kind == "ai_image":
-        image_b64 = await ai.generate_promo_image_base64()
-        if image_b64 is None:
-            raise HTTPException(status_code=502, detail="Falha ao gerar imagem via OpenAI")
-        result = await mcp_client.call_tool(
-            "send-image", {"phone": campaign.whatsapp_group_id, "image": image_b64, "caption": body.text or ""}
-        )
-    else:
-        if not body.text:
-            raise HTTPException(status_code=422, detail="text e obrigatorio para kind='text'")
-        result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": body.text})
+    result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": body.text})
 
     return {"status": "sent", "mcp_result": result}
 
