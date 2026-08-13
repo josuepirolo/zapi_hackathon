@@ -101,10 +101,29 @@ escopo funcional do cenário de demo (troca de óleo é 1:1), mas documentadas
 porque fazem parte da superfície real do servidor.
 
 ### `group-create`
+**Status:** ✅ testada ao vivo (2026-08-13, app de produto `app/admin_api.py`).
+
 - **Finalidade:** criar grupo com participantes.
 - **Parâmetros:** `groupName` (string, obrigatório), `phones` (array de
   string, obrigatório, mesmo formato de `send-text`), `autoInvite` (boolean,
   obrigatório — envia link de convite em privado).
+- **Achado crítico: `phones: []` é rejeitado.** Chamada real com array vazio
+  retornou `{"success":false,"message":"participants not found"}` — o MCP
+  exige pelo menos um participante para criar o grupo, não é possível criar
+  vazio e adicionar depois via `group-add-participant`. `app/admin_api.py`
+  agora exige `seed_phones` (mínimo 1) no `POST /campaigns`.
+- **Achado crítico: formato real do retorno de `tools/call`.** O payload de
+  negócio (`success`, mensagens de erro, IDs) não vem em chaves soltas do
+  resultado — vem como uma **string JSON dentro de `content[0]['text']`**:
+  ```json
+  {"content": [{"type": "text", "text": "{\"success\": false, \"message\": \"participants not found\"}"}], "is_error": false}
+  ```
+  `is_error: false` no envelope só significa que a chamada MCP em si não
+  quebrou — **não** que a operação teve sucesso; é preciso parsear
+  `content[0]['text']` como JSON e checar `success` dentro dele. Provável
+  que as demais tools (`send-text`, `group-add-participant` etc.) sigam o
+  mesmo envelope — `app/mcp_client.py` (`parse_tool_payload`,
+  `tool_call_succeeded`) trata isso de forma genérica.
 - **Limitação documentada:** não é possível criar grupo já com imagem; precisa
   de chamada separada (tool de update de foto não está entre as 9 atuais).
 
@@ -149,8 +168,12 @@ erro, não sucesso. Ver nota abaixo.
 - Formato exato de `groupId` aceito por `group-metadata` (e pelas outras
   tools de grupo) ainda não confirmado com sucesso — só confirmado que o
   código de convite (`chat.whatsapp.com/<codigo>`) não funciona (erro 400).
-- Schemas de retorno de `send-image`, `send-video` e das tools de grupo ainda
-  não foram observados na prática — não assumir formato até testar.
+- Schemas de retorno de `send-image`, `send-video`, `group-add-participant`,
+  `group-remove-participant`, `group-add-admin`, `group-remove-admin` ainda
+  não foram observados na prática — não assumir formato até testar. O
+  envelope genérico (`content[0]['text']` como JSON string) já é conhecido
+  desde `group-create`; falta confirmar os campos de negócio específicos de
+  cada tool.
 - Schema completo do payload do webhook `on-message-received` ainda não foi
   capturado (próximo passo do experimento da Fase 0).
 - Doc oficial da Z-API menciona "mais tools planejadas" — revalidar esta lista

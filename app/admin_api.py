@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,10 @@ class CampaignCreate(BaseModel):
     description: str | None = None
     invitation_message: str
     welcome_message: str
+    # group-create do MCP recusa phones: [] com {"success":false,"message":
+    # "participants not found"} (confirmado ao vivo) - precisa de pelo
+    # menos um numero. Tipicamente o proprio numero do admin.
+    seed_phones: list[str] = Field(min_length=1)
 
 
 class CampaignOut(BaseModel):
@@ -63,19 +67,18 @@ class ContentCreate(BaseModel):
 
 
 def _extract_group_id(mcp_result: dict) -> str | None:
-    """`group-create` ainda nao teve o schema de retorno confirmado ao vivo
-    (ver docs/zapi-mcp-capabilities.md). Tenta as chaves mais prováveis;
-    se nenhuma bater, loga o retorno bruto para inspecao manual."""
-    content = mcp_result.get("content") if isinstance(mcp_result, dict) else None
-    candidates: list[dict] = [mcp_result] if isinstance(mcp_result, dict) else []
-    if isinstance(content, list):
-        candidates.extend(c for c in content if isinstance(c, dict))
-    for candidate in candidates:
-        for key in ("groupId", "id", "phone"):
-            value = candidate.get(key)
-            if value:
-                return str(value)
-    logger.warning("Nao foi possivel extrair groupId do retorno de group-create: %r", mcp_result)
+    payload = mcp_client.parse_tool_payload(mcp_result)
+    if payload is None:
+        logger.warning("Nao foi possivel parsear o retorno de group-create: %r", mcp_result)
+        return None
+    if payload.get("success") is False:
+        logger.warning("group-create retornou falha de negocio: %r", payload)
+        return None
+    for key in ("groupId", "id", "phone"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    logger.warning("group-create OK mas nenhuma chave de groupId conhecida no payload: %r", payload)
     return None
 
 
@@ -92,7 +95,7 @@ async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(
 
     try:
         result = await mcp_client.call_tool(
-            "group-create", {"groupName": body.name, "phones": [], "autoInvite": True}
+            "group-create", {"groupName": body.name, "phones": body.seed_phones, "autoInvite": True}
         )
         campaign.whatsapp_group_id = _extract_group_id(result)
     except Exception:
