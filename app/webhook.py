@@ -110,12 +110,22 @@ async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool
     Retorna True e marca `membership_status=ADDED` só em sucesso confirmado
     (`mcp_client.tool_call_succeeded`) - nunca assume sucesso por não ter
     dado exceção (achado do incidente 2026-08-13: falha de negocio dentro
-    de um envelope HTTP 200 tinha passado batido antes)."""
+    de um envelope HTTP 200 tinha passado batido antes).
+
+    Usa `contact.phone` (MSISDN puro) para as tools de GRUPO quando
+    disponivel, nao `contact.chat_lid` (formato `@lid`) - `send-text`
+    aceita LID no parametro `phone` (documentado), mas `group-create`/
+    `group-add-participant` com LID retornaram "participants not found"
+    mesmo com um contato real (achado ao vivo 2026-08-13); a correlacao
+    interna continua por `chat_lid` (ADR-0001), so o parametro enviado ao
+    MCP muda."""
+    target_phone = contact.phone or contact.chat_lid
+
     if campaign.whatsapp_group_id:
         try:
             add_result = await mcp_client.call_tool(
                 "group-add-participant",
-                {"groupId": campaign.whatsapp_group_id, "phones": [contact.chat_lid], "autoInvite": True},
+                {"groupId": campaign.whatsapp_group_id, "phones": [target_phone], "autoInvite": True},
             )
         except Exception:
             logger.exception("Falha ao adicionar %s ao grupo via MCP", contact.chat_lid)
@@ -130,7 +140,7 @@ async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool
     try:
         create_result = await mcp_client.call_tool(
             "group-create",
-            {"groupName": campaign.name, "phones": [contact.chat_lid], "autoInvite": True},
+            {"groupName": campaign.name, "phones": [target_phone], "autoInvite": True},
         )
     except Exception:
         logger.exception("Falha ao criar grupo via MCP para a campanha %s", campaign.id)
