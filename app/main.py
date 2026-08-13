@@ -43,3 +43,8 @@ async def health() -> dict[str, str]:
 @app.get("/")
 async def panel() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/participar")
+async def landing() -> FileResponse:
+    return FileResponse(STATIC_DIR / "landing.html")

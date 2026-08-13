@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Grupo de Promoções</title>
+<style>
+  :root {
+    --bg: #0f2a1c;
+    --card: #ffffff;
+    --text: #17301f;
+    --muted: #5b6b60;
+    --accent: #1e7a4d;
+    --accent-dark: #145c39;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(circle at top, #1e7a4d 0%, #0f2a1c 70%);
+    padding: 24px;
+  }
+  .card {
+    background: var(--card);
+    color: var(--text);
+    border-radius: 18px;
+    max-width: 420px;
+    width: 100%;
+    padding: 40px 32px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  .badge {
+    display: inline-block;
+    background: #e6f4ec;
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 4px 12px;
+    border-radius: 999px;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+  h1 { margin: 0 0 10px; font-size: 1.6rem; line-height: 1.25; }
+  p.lead { color: var(--muted); font-size: 0.95rem; margin: 0 0 28px; line-height: 1.5; }
+  a.cta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.05rem;
+    padding: 16px 20px;
+    border-radius: 12px;
+    transition: background 0.15s;
+  }
+  a.cta:hover { background: var(--accent-dark); }
+  a.cta svg { width: 22px; height: 22px; flex-shrink: 0; }
+  .footnote { margin-top: 18px; color: var(--muted); font-size: 0.75rem; }
+  .loading { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <span class="badge">Novidade</span>
+  <h1 id="title">Entre no nosso grupo de promoções</h1>
+  <p class="lead" id="subtitle">Receba ofertas e novidades exclusivas direto no seu WhatsApp — é só um clique.</p>
+
+  <div id="cta-area"><p class="loading">Carregando…</p></div>
+
+  <p class="footnote">Ao clicar, uma conversa de WhatsApp abre com uma mensagem pronta — é só enviar.</p>
+</div>
+
+<script>
+// Numero da instancia Z-API conectada (formato DDI+DDD+numero, sem
+// mascara). Unico ponto a atualizar se a instancia mudar.
+const INSTANCE_PHONE = "5544998094320";
+
+const WHATSAPP_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.87 9.87 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm5.8 14.1c-.24.68-1.4 1.3-1.93 1.38-.5.08-1.12.11-1.8-.11-.42-.13-.96-.31-1.65-.6-2.9-1.25-4.8-4.17-4.94-4.36-.15-.19-1.18-1.57-1.18-3 0-1.42.75-2.12 1.01-2.41.27-.29.58-.36.78-.36.2 0 .39 0 .56.01.18.01.42-.07.66.5.24.58.83 2 .9 2.15.07.15.12.33.02.53-.1.19-.15.31-.3.48-.15.17-.31.38-.44.51-.15.15-.3.31-.13.6.17.29.75 1.24 1.62 2.01 1.11.99 2.05 1.3 2.34 1.44.29.15.46.13.63-.08.17-.2.72-.84.91-1.13.19-.29.39-.24.65-.14.27.1 1.69.8 1.98.94.29.15.48.22.55.34.07.12.07.7-.17 1.38z"/></svg>`;
+
+async function init() {
+  const ctaArea = document.getElementById("cta-area");
+  try {
+    const campaigns = await (await fetch("/campaigns")).json();
+    if (!campaigns.length) {
+      ctaArea.innerHTML = `<p class="loading">Nenhuma campanha ativa no momento.</p>`;
+      return;
+    }
+    const campaign = campaigns[0];
+    document.getElementById("title").textContent = campaign.name || document.getElementById("title").textContent;
+    if (campaign.description) document.getElementById("subtitle").textContent = campaign.description;
+
+    const link = `https://wa.me/${INSTANCE_PHONE}?text=${encodeURIComponent(campaign.trigger_keyword)}`;
+    ctaArea.innerHTML = `<a class="cta" href="${link}" target="_blank" rel="noopener">${WHATSAPP_ICON} Quero participar</a>`;
+  } catch (err) {
+    ctaArea.innerHTML = `<p class="loading">Não foi possível carregar agora.</p>`;
+  }
+}
+
+init();
+</script>
+
+</body>
+</html>
