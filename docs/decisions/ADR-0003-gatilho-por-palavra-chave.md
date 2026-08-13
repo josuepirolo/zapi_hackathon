@@ -12,9 +12,10 @@ participar da campanha" e disparava o convite automaticamente
 (`app/webhook.py`, `_handle_new_contact`). No teste end-to-end real contra
 o WhatsApp da instância, isso resultou em **mensagens não solicitadas
 enviadas para contatos sem relação com o hackathon** assim que uma
-mensagem real chegou por qualquer motivo — o número da instância já é
-usado para outros fins (contato "Lekazis Marketing" observado na Fase 0).
-O usuário precisou derrubar os containers para conter o envio em massa.
+mensagem real chegou por qualquer motivo — a instância roda no WhatsApp
+pessoal do usuário (não um número dedicado ao hackathon), que já tem
+conversas/contatos anteriores sem relação com o projeto. O usuário
+precisou derrubar os containers para conter o envio em massa.
 
 Isso viola diretamente a regra 14 do `CONTEXT_UPDATED.md` ("Não enviar
 mensagens não solicitadas... O ambiente deve ser reproduzível e seguro
