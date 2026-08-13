@@ -17,6 +17,13 @@ uma mensagem de contato novo so inicia o fluxo de consentimento se
 contiver a `trigger_keyword` de alguma campanha (case-insensitive,
 substring). Sem match: mensagem e completamente ignorada (sem Contact
 criado, sem resposta enviada).
+
+Criacao lazy do grupo (RN-007): `group-create` do MCP rejeita `phones`
+vazio ou so com o proprio numero da instancia (achado ao vivo). Por isso
+o grupo nao e criado em `POST /campaigns` - so quando o PRIMEIRO contato
+real aceita participar (`intent == ACCEPT`), usando o proprio contato
+como participante inicial. Aceites seguintes usam `group-add-participant`
+normalmente, ja com `campaign.whatsapp_group_id` preenchido.
 """
 
 from __future__ import annotations
@@ -106,7 +113,22 @@ async def _handle_pending_contact(session: AsyncSession, contact: Contact, campa
                 return  # idem - falha de negocio, nao de transporte
             contact.membership_status = MembershipStatus.ADDED
         else:
-            logger.warning("Campanha %s sem whatsapp_group_id - contato aceito mas nao adicionado.", campaign.id)
+            # primeiro aceite da campanha: cria o grupo agora, com este
+            # contato como participante inicial (RN-007)
+            try:
+                create_result = await mcp_client.call_tool(
+                    "group-create",
+                    {"groupName": campaign.name, "phones": [contact.chat_lid], "autoInvite": True},
+                )
+            except Exception:
+                logger.exception("Falha ao criar grupo via MCP para a campanha %s", campaign.id)
+                return  # nao avanca o estado se a criacao falhar
+            group_id = mcp_client.extract_group_id(create_result)
+            if group_id is None:
+                logger.warning("group-create nao retornou groupId utilizavel: %r", create_result)
+                return
+            campaign.whatsapp_group_id = group_id
+            contact.membership_status = MembershipStatus.ADDED
 
         contact.consent_status = ConsentStatus.ACCEPTED
         contact.consent_at = datetime.now(timezone.utc)

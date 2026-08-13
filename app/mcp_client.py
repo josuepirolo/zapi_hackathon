@@ -190,3 +190,17 @@ def tool_call_succeeded(mcp_result: dict[str, Any]) -> bool:
     if payload is None:
         return False
     return payload.get("success") is not False
+
+
+def extract_group_id(mcp_result: dict[str, Any]) -> str | None:
+    """Extrai o groupId do retorno de `group-create` (chaves observadas
+    ao vivo variam - `groupId`/`id`/`phone`). `None` se o payload nao
+    parsear ou indicar falha de negocio (ver `tool_call_succeeded`)."""
+    payload = parse_tool_payload(mcp_result)
+    if payload is None or payload.get("success") is False:
+        return None
+    for key in ("groupId", "id", "phone"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return None
