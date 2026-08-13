@@ -24,6 +24,15 @@ o grupo nao e criado em `POST /campaigns` - so quando o PRIMEIRO contato
 real aceita participar (`intent == ACCEPT`), usando o proprio contato
 como participante inicial. Aceites seguintes usam `group-add-participant`
 normalmente, ja com `campaign.whatsapp_group_id` preenchido.
+
+Auto-recuperacao de aceite travado (RN-008): nao existe tool MCP para
+listar em quais grupos um numero esta (achado da Fase 0) - entao nao da
+para confirmar "de fora" se um contato ACCEPTED realmente foi adicionado.
+Em vez de assumir que sim (ou pedir correcao manual no banco), qualquer
+nova mensagem de um contato `ACCEPTED` com `membership_status=NONE`
+tenta de novo criar/adicionar ao grupo automaticamente - cobre tanto
+falha transitoria de MCP quanto registros antigos que ficaram
+inconsistentes numa versao anterior do codigo.
 """
 
 from __future__ import annotations
@@ -95,40 +104,67 @@ async def _handle_new_contact(session: AsyncSession, chat_lid: str, phone: str |
     await session.commit()
 
 
+async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool:
+    """Garante que `contact` esta no grupo da campanha - cria o grupo se
+    for o primeiro membro (RN-007), ou adiciona a um grupo ja existente.
+    Retorna True e marca `membership_status=ADDED` só em sucesso confirmado
+    (`mcp_client.tool_call_succeeded`) - nunca assume sucesso por não ter
+    dado exceção (achado do incidente 2026-08-13: falha de negocio dentro
+    de um envelope HTTP 200 tinha passado batido antes)."""
+    if campaign.whatsapp_group_id:
+        try:
+            add_result = await mcp_client.call_tool(
+                "group-add-participant",
+                {"groupId": campaign.whatsapp_group_id, "phones": [contact.chat_lid], "autoInvite": True},
+            )
+        except Exception:
+            logger.exception("Falha ao adicionar %s ao grupo via MCP", contact.chat_lid)
+            return False
+        if not mcp_client.tool_call_succeeded(add_result):
+            logger.warning("group-add-participant recusou %s: %r", contact.chat_lid, add_result)
+            return False
+        contact.membership_status = MembershipStatus.ADDED
+        return True
+
+    # primeiro membro da campanha: cria o grupo agora (RN-007)
+    try:
+        create_result = await mcp_client.call_tool(
+            "group-create",
+            {"groupName": campaign.name, "phones": [contact.chat_lid], "autoInvite": True},
+        )
+    except Exception:
+        logger.exception("Falha ao criar grupo via MCP para a campanha %s", campaign.id)
+        return False
+    group_id = mcp_client.extract_group_id(create_result)
+    if group_id is None:
+        logger.warning("group-create nao retornou groupId utilizavel: %r", create_result)
+        return False
+    campaign.whatsapp_group_id = group_id
+    contact.membership_status = MembershipStatus.ADDED
+    return True
+
+
+async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:
+    """Contato ja ACCEPTED mas nunca confirmado no grupo (ex.: MCP falhou
+    na hora, ou o registro ficou de uma versao anterior do codigo que
+    marcava ACCEPTED sem completar a adicao). Qualquer nova mensagem dele
+    tenta de novo, em vez de ficar preso pra sempre - sem exigir
+    intervencao manual no banco."""
+    logger.info("Retentando adicao ao grupo para %s (ACCEPTED, membership_status=NONE).", contact.chat_lid)
+    if await _ensure_group_membership(contact, campaign):
+        try:
+            await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": campaign.welcome_message})
+        except Exception:
+            logger.exception("Falha ao enviar mensagem de boas-vindas via MCP para %s", contact.chat_lid)
+    await session.commit()
+
+
 async def _handle_pending_contact(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
     intent = await interpret_intent(texto)
 
     if intent == "ACCEPT":
-        if campaign.whatsapp_group_id:
-            try:
-                add_result = await mcp_client.call_tool(
-                    "group-add-participant",
-                    {"groupId": campaign.whatsapp_group_id, "phones": [contact.chat_lid], "autoInvite": True},
-                )
-            except Exception:
-                logger.exception("Falha ao adicionar %s ao grupo via MCP", contact.chat_lid)
-                return  # nao avanca o estado se a adicao falhar
-            if not mcp_client.tool_call_succeeded(add_result):
-                logger.warning("group-add-participant recusou %s: %r", contact.chat_lid, add_result)
-                return  # idem - falha de negocio, nao de transporte
-            contact.membership_status = MembershipStatus.ADDED
-        else:
-            # primeiro aceite da campanha: cria o grupo agora, com este
-            # contato como participante inicial (RN-007)
-            try:
-                create_result = await mcp_client.call_tool(
-                    "group-create",
-                    {"groupName": campaign.name, "phones": [contact.chat_lid], "autoInvite": True},
-                )
-            except Exception:
-                logger.exception("Falha ao criar grupo via MCP para a campanha %s", campaign.id)
-                return  # nao avanca o estado se a criacao falhar
-            group_id = mcp_client.extract_group_id(create_result)
-            if group_id is None:
-                logger.warning("group-create nao retornou groupId utilizavel: %r", create_result)
-                return
-            campaign.whatsapp_group_id = group_id
-            contact.membership_status = MembershipStatus.ADDED
+        if not await _ensure_group_membership(contact, campaign):
+            return  # nao avanca consent_status se a adicao/criacao falhar
 
         contact.consent_status = ConsentStatus.ACCEPTED
         contact.consent_at = datetime.now(timezone.utc)
@@ -198,11 +234,16 @@ async def on_message_received(secret: str, request: Request) -> JSONResponse:
             campaign_result = await session.get(Campaign, contact.campaign_id)
             if campaign_result is not None:
                 await _handle_pending_contact(session, contact, campaign_result, texto)
+        elif contact.consent_status == ConsentStatus.ACCEPTED and contact.membership_status == MembershipStatus.NONE:
+            campaign_result = await session.get(Campaign, contact.campaign_id)
+            if campaign_result is not None:
+                await _retry_stuck_acceptance(session, contact, campaign_result)
         else:
             logger.info(
-                "Mensagem de %s com consent_status=%s (fora do fluxo de consentimento) - ignorada.",
+                "Mensagem de %s com consent_status=%s/membership_status=%s (fora do fluxo de consentimento) - ignorada.",
                 chat_lid,
                 contact.consent_status,
+                contact.membership_status,
             )
 
         if message_id:
