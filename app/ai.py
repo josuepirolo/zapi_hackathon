@@ -96,13 +96,9 @@ async def interpret_confirmation(texto: str) -> Confirmation:
     return raw  # type: ignore[return-value]
 
 
-# Prompt fixo e controlado (nao aceita input do usuario/webhook) - evita
-# prompt injection via geracao de imagem. Confirmado contra a doc oficial
-# da OpenAI (2026-08-13, developers.openai.com/api/docs/guides/image-generation)
-# antes de implementar: client.images.generate(model="gpt-image-2", ...,
-# response_format="b64_json") retorna base64 direto, sem precisar hospedar
-# a imagem em lugar nenhum - `send-image` do MCP aceita base64 no campo
-# `image`.
+# Confirmado contra doc oficial OpenAI (2026-08-13): modelos GPT Image
+# (`gpt-image-*`) sempre retornam base64 em `data[].b64_json` — o parametro
+# `response_format` so vale para dall-e-2/3 e gera 400 se enviado aqui.
 _PROMO_IMAGE_PROMPT = (
     "Banner promocional vibrante e moderno para um grupo de ofertas no "
     "WhatsApp. Estilo flat design, cores vivas (verde e dourado), "
@@ -112,18 +108,20 @@ _IMAGE_MODEL = "gpt-image-2"
 
 
 async def generate_promo_image_base64() -> str | None:
-    """Gera a imagem promocional padrao e retorna como string base64
-    (`b64_json`), pronta pra usar direto no `send-image` do MCP.
-    `None` em qualquer falha - o chamador decide como reagir."""
+    """Gera imagem de boas-vindas (prompt fixo) e retorna base64 em memoria
+    para `send-image` do MCP no grupo — nunca persiste nem publica URL."""
     try:
         result = await _client.images.generate(
             model=_IMAGE_MODEL,
             prompt=_PROMO_IMAGE_PROMPT,
             size="1024x1024",
             quality="medium",
-            response_format="b64_json",
         )
-        return result.data[0].b64_json
+        b64 = result.data[0].b64_json
+        if not b64:
+            logger.error("OpenAI retornou imagem sem b64_json (modelo=%s)", _IMAGE_MODEL)
+            return None
+        return b64
     except Exception:
         logger.exception("Falha ao gerar imagem promocional via OpenAI")
         return None

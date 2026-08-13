@@ -148,7 +148,7 @@
         <input name="trigger_keyword" required placeholder="ex.: #desafiozapi" />
         <label>Mensagem de convite</label>
         <textarea name="invitation_message" required></textarea>
-        <label>Mensagem de boas-vindas</label>
+        <label>Mensagem de boas-vindas (legenda da imagem IA enviada no grupo ao aceitar)</label>
         <textarea name="welcome_message" required></textarea>
         <div class="row" style="margin-top: 12px;">
           <button type="submit">Criar campanha</button>
@@ -182,14 +182,6 @@
         <button type="submit" id="content-submit">Enviar</button>
       </div>
     </form>
-
-    <hr style="border: none; border-top: 1px solid var(--border); margin: 18px 0;" />
-
-    <p class="muted" style="margin-top:0;">Gera uma imagem promocional com IA (prompt fixo) e envia pro grupo.</p>
-    <div class="row">
-      <input id="ai-image-caption" placeholder="Legenda (opcional)" style="flex:1;" />
-      <button type="button" id="ai-image-submit" class="secondary">Gerar e enviar imagem (IA)</button>
-    </div>
   </section>
 
 </main>
@@ -411,29 +403,6 @@ document.getElementById("content-form").addEventListener("submit", async (e) => 
     toast("Erro ao enviar: " + err.message, true);
   } finally {
     btn.disabled = false;
-  }
-});
-
-document.getElementById("ai-image-submit").addEventListener("click", async () => {
-  if (!selectedId) return;
-  const caption = document.getElementById("ai-image-caption").value;
-  const btn = document.getElementById("ai-image-submit");
-  const originalLabel = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Gerando imagem…";
-  try {
-    await api(`/campaigns/${selectedId}/content`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "ai_image", text: caption }),
-    });
-    toast("Imagem gerada e enviada.");
-    document.getElementById("ai-image-caption").value = "";
-  } catch (err) {
-    toast("Erro ao gerar/enviar imagem: " + err.message, true);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = originalLabel;
   }
 });
 
