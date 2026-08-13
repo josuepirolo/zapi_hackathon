@@ -30,6 +30,11 @@ router = APIRouter(prefix="/campaigns", tags=["admin"])
 class CampaignCreate(BaseModel):
     name: str
     description: str | None = None
+    # Mensagem de contato novo so inicia consentimento se contiver essa
+    # palavra (case-insensitive) - ver app/webhook.py, RN-006. Sem isso,
+    # qualquer mensagem de qualquer numero desconhecido virava convite
+    # automatico (incidente real 2026-08-13).
+    trigger_keyword: str = Field(min_length=1)
     invitation_message: str
     welcome_message: str
     # group-create do MCP recusa phones: [] com {"success":false,"message":
@@ -43,6 +48,7 @@ class CampaignOut(BaseModel):
     name: str
     description: str | None
     whatsapp_group_id: str | None
+    trigger_keyword: str
     invitation_message: str
     welcome_message: str
     created_at: datetime
@@ -87,6 +93,7 @@ async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(
     campaign = Campaign(
         name=body.name,
         description=body.description,
+        trigger_keyword=body.trigger_keyword,
         invitation_message=body.invitation_message,
         welcome_message=body.welcome_message,
     )

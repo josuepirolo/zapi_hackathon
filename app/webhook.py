@@ -7,12 +7,16 @@ Reaproveita o padrao de seguranca do `webhook_receiver/app.py` original:
 segredo obrigatorio no path (`secrets.compare_digest`, 404 se invalido) e
 redacao de headers sensiveis.
 
-Decisao pragmatica (nao coberta explicitamente no plano recuperado): como
-o payload do webhook nao identifica a campanha, uma mensagem de um
-contato novo (sem `Contact` existente) e associada a campanha mais
-recente (`Campaign` com maior `id`). Correto para o cenario de demo
-(uma campanha ativa por vez); com multiplas campanhas simultaneas isso
-precisaria de outro mecanismo de roteamento - `Ponto em aberto`.
+Correlacao de campanha por palavra-chave (RN-006, incidente real
+2026-08-13): o payload do webhook nao identifica a campanha, e a versao
+anterior tratava QUALQUER mensagem de QUALQUER numero desconhecido como
+"quer entrar" e mandava convite automatico - isso enviou mensagens nao
+solicitadas para contatos sem relacao com o hackathon assim que uma
+mensagem real chegou num numero ja usado para outros fins. Corrigido:
+uma mensagem de contato novo so inicia o fluxo de consentimento se
+contiver a `trigger_keyword` de alguma campanha (case-insensitive,
+substring). Sem match: mensagem e completamente ignorada (sem Contact
+criado, sem resposta enviada).
 """
 
 from __future__ import annotations
@@ -44,9 +48,19 @@ def _check_secret(secret: str) -> None:
         raise HTTPException(status_code=404)
 
 
-async def _latest_campaign(session: AsyncSession) -> Campaign | None:
-    result = await session.execute(select(Campaign).order_by(Campaign.id.desc()).limit(1))
-    return result.scalar_one_or_none()
+async def _match_campaign_by_keyword(session: AsyncSession, texto: str) -> Campaign | None:
+    result = await session.execute(select(Campaign).order_by(Campaign.id.desc()))
+    texto_lower = texto.lower()
+    matches = [c for c in result.scalars().all() if c.trigger_keyword and c.trigger_keyword.lower() in texto_lower]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "Mensagem bateu com %d campanhas por palavra-chave (%s) - usando a mais recente.",
+            len(matches),
+            [c.id for c in matches],
+        )
+    return matches[0]
 
 
 async def _get_contact(session: AsyncSession, chat_lid: str) -> Contact | None:
@@ -54,10 +68,13 @@ async def _get_contact(session: AsyncSession, chat_lid: str) -> Contact | None:
     return result.scalar_one_or_none()
 
 
-async def _handle_new_contact(session: AsyncSession, chat_lid: str, phone: str | None) -> None:
-    campaign = await _latest_campaign(session)
+async def _handle_new_contact(session: AsyncSession, chat_lid: str, phone: str | None, texto: str) -> None:
+    campaign = await _match_campaign_by_keyword(session, texto)
     if campaign is None:
-        logger.warning("Mensagem de %s recebida sem nenhuma campanha cadastrada - ignorada.", chat_lid)
+        logger.info(
+            "Mensagem de %s nao contem palavra-chave de nenhuma campanha - ignorada (sem Contact, sem resposta).",
+            chat_lid,
+        )
         return
 
     contact = Contact(campaign_id=campaign.id, chat_lid=chat_lid, phone=phone, consent_status=ConsentStatus.PENDING)
@@ -154,7 +171,7 @@ async def on_message_received(secret: str, request: Request) -> JSONResponse:
             return JSONResponse(content={"status": "received"}, status_code=200)
 
         if contact is None:
-            await _handle_new_contact(session, chat_lid, phone)
+            await _handle_new_contact(session, chat_lid, phone, texto)
         elif contact.consent_status == ConsentStatus.PENDING:
             campaign_result = await session.get(Campaign, contact.campaign_id)
             if campaign_result is not None:
