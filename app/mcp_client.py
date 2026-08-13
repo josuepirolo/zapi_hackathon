@@ -17,6 +17,7 @@ Unico ponto de import do SDK MCP (`mcp[cli]`) do projeto - ver
 
 from __future__ import annotations
 
+import json
 import threading
 import webbrowser
 from contextlib import asynccontextmanager
@@ -156,3 +157,36 @@ async def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
     async with mcp_session() as session:
         result = await session.call_tool(tool_name, arguments=arguments)
         return result.model_dump()
+
+
+def parse_tool_payload(mcp_result: dict[str, Any]) -> dict[str, Any] | None:
+    """O retorno real de `tools/call` (confirmado ao vivo) traz o payload
+    de negocio como uma STRING JSON dentro de `content[0]['text']`, nao
+    como chaves soltas no dict de resultado - ex.:
+    `{"content": [{"type": "text", "text": "{\\"success\\": false, ...}"}]}`.
+    Um `is_error: False` no envelope so significa que a chamada MCP em si
+    funcionou, nao que a operacao de negocio teve sucesso - sempre checar
+    a chave `success` do payload parseado antes de considerar concluido.
+    """
+    content = mcp_result.get("content") if isinstance(mcp_result, dict) else None
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            try:
+                parsed = json.loads(block.get("text", ""))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def tool_call_succeeded(mcp_result: dict[str, Any]) -> bool:
+    """True se o payload parseado nao indicar falha explicita
+    (`success: false`). Payload nao-parseavel e tratado como falha -
+    nunca assumir sucesso sem confirmacao."""
+    payload = parse_tool_payload(mcp_result)
+    if payload is None:
+        return False
+    return payload.get("success") is not False

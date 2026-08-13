@@ -77,13 +77,16 @@ async def _handle_pending_contact(session: AsyncSession, contact: Contact, campa
     if intent == "ACCEPT":
         if campaign.whatsapp_group_id:
             try:
-                await mcp_client.call_tool(
+                add_result = await mcp_client.call_tool(
                     "group-add-participant",
                     {"groupId": campaign.whatsapp_group_id, "phones": [contact.chat_lid], "autoInvite": True},
                 )
             except Exception:
                 logger.exception("Falha ao adicionar %s ao grupo via MCP", contact.chat_lid)
                 return  # nao avanca o estado se a adicao falhar
+            if not mcp_client.tool_call_succeeded(add_result):
+                logger.warning("group-add-participant recusou %s: %r", contact.chat_lid, add_result)
+                return  # idem - falha de negocio, nao de transporte
             contact.membership_status = MembershipStatus.ADDED
         else:
             logger.warning("Campanha %s sem whatsapp_group_id - contato aceito mas nao adicionado.", campaign.id)
