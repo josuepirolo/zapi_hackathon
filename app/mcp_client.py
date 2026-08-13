@@ -18,12 +18,13 @@ Unico ponto de import do SDK MCP (`mcp[cli]`) do projeto - ver
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import webbrowser
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qs, urlparse
 
 import anyio
@@ -32,7 +33,16 @@ from mcp.client.auth.oauth2 import OAuthClientProvider
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
+logger = logging.getLogger("delega.mcp_client")
+
 MCP_SERVER_URL = "https://mcp.z-api.io/mcp"
+
+# Falhas de rede transitorias (DNS instavel na VM, observado repetidas
+# vezes ao vivo - "Name or service not known") nao podem derrubar o
+# fluxo de consentimento. 3 tentativas com backoff curto antes de desistir
+# de verdade (o chamador ja trata a excecao final sem quebrar o webhook).
+MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY_SECONDS = 1.0
 CALLBACK_HOST = "127.0.0.1"
 CALLBACK_PORT = 8765
 REDIRECT_URI = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback"
@@ -147,16 +157,43 @@ async def mcp_session() -> AsyncIterator[ClientSession]:
                 yield session
 
 
+async def _with_retries(operation_name: str, run: Callable[[ClientSession], Awaitable[Any]]) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            async with mcp_session() as session:
+                return await run(session)
+        except Exception as exc:  # falha de rede/DNS transitoria, ver MAX_ATTEMPTS
+            last_exc = exc
+            if attempt < MAX_ATTEMPTS:
+                delay = RETRY_BASE_DELAY_SECONDS * attempt
+                logger.warning(
+                    "MCP %s falhou (tentativa %d/%d): %s - retry em %.1fs",
+                    operation_name,
+                    attempt,
+                    MAX_ATTEMPTS,
+                    exc,
+                    delay,
+                )
+                await anyio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
 async def list_tools() -> list[dict[str, Any]]:
-    async with mcp_session() as session:
+    async def _run(session: ClientSession) -> list[dict[str, Any]]:
         result = await session.list_tools()
         return [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in result.tools]
 
+    return await _with_retries("list_tools", _run)
+
 
 async def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
-    async with mcp_session() as session:
+    async def _run(session: ClientSession) -> Any:
         result = await session.call_tool(tool_name, arguments=arguments)
         return result.model_dump()
+
+    return await _with_retries(f"call_tool({tool_name})", _run)
 
 
 def parse_tool_payload(mcp_result: dict[str, Any]) -> dict[str, Any] | None:
