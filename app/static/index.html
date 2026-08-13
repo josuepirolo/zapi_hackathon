@@ -98,6 +98,26 @@
   }
   #toast.show { opacity: 1; }
   details summary { cursor: pointer; color: var(--accent); font-size: 0.875rem; font-weight: 600; }
+  button.small { padding: 4px 8px; font-size: 0.75rem; }
+  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+  }
+  .tool-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #f1f2f4;
+    color: var(--muted);
+    transition: background 0.3s, color 0.3s;
+  }
+  .tool-chip.used { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+  .tool-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -113,6 +133,7 @@
     <h2>Campanha</h2>
     <div class="row">
       <select id="campaign-select" style="flex: 1;"></select>
+      <button type="button" id="delete-campaign" class="secondary" style="color: var(--danger); border-color: var(--danger);">Excluir</button>
     </div>
     <div id="campaign-details" class="muted" style="margin-top: 10px;">Nenhuma campanha selecionada.</div>
 
@@ -140,11 +161,16 @@
     <h2>Participantes</h2>
     <table id="contacts-table">
       <thead>
-        <tr><th>Contato</th><th>Telefone</th><th>Consentimento</th><th>Grupo</th></tr>
+        <tr><th>Contato</th><th>Telefone</th><th>Consentimento</th><th>Grupo</th><th>Ações</th></tr>
       </thead>
       <tbody></tbody>
     </table>
     <p id="contacts-empty" class="muted" style="display:none;">Nenhum participante ainda.</p>
+  </section>
+
+  <section class="card">
+    <h2>Tools MCP usadas nesta sessão</h2>
+    <div class="tools-grid" id="tools-grid"></div>
   </section>
 
   <section class="card">
@@ -259,15 +285,83 @@ function renderContacts(contacts) {
   empty.style.display = contacts.length === 0 ? "block" : "none";
   for (const contact of contacts) {
     const tr = document.createElement("tr");
+    const inGroup = contact.membership_status === "ADDED";
+    const adminBadge = contact.is_admin ? ` <span class="badge ok">ADMIN</span>` : "";
+    const actions = inGroup
+      ? `
+        <div class="row-actions">
+          <button type="button" class="small secondary" data-action="${contact.is_admin ? "demote" : "promote"}" data-id="${contact.id}">
+            ${contact.is_admin ? "Rebaixar" : "Promover"}
+          </button>
+          <button type="button" class="small secondary" style="color: var(--danger); border-color: var(--danger);" data-action="remove" data-id="${contact.id}">Remover</button>
+        </div>`
+      : "—";
     tr.innerHTML = `
       <td>${contact.name || contact.chat_lid}</td>
       <td>${contact.phone || "—"}</td>
       <td>${statusBadge(contact.consent_status)}</td>
-      <td>${membershipBadge(contact.membership_status, contact.removal_pending)}</td>
+      <td>${membershipBadge(contact.membership_status, contact.removal_pending)}${adminBadge}</td>
+      <td>${actions}</td>
     `;
     tbody.appendChild(tr);
   }
 }
+
+document.querySelector("#contacts-table tbody").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn || !selectedId) return;
+  const { action, id } = btn.dataset;
+  btn.disabled = true;
+  try {
+    await api(`/campaigns/${selectedId}/contacts/${id}/${action}`, { method: "POST" });
+    const labels = { promote: "Promovido a admin.", demote: "Rebaixado.", remove: "Removido do grupo." };
+    toast(labels[action] || "Feito.");
+    await onCampaignChange();
+  } catch (err) {
+    toast("Erro: " + err.message, true);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("delete-campaign").addEventListener("click", async () => {
+  if (!selectedId) return;
+  const campaign = campaigns.find(c => c.id === selectedId);
+  if (!confirm(`Excluir a campanha "${campaign?.name}"? O grupo real no WhatsApp (se existir) não é apagado, só o registro aqui.`)) return;
+  try {
+    await api(`/campaigns/${selectedId}`, { method: "DELETE" });
+    toast("Campanha excluída.");
+    await loadCampaigns();
+  } catch (err) {
+    toast("Erro ao excluir: " + err.message, true);
+  }
+});
+
+const TOOL_LABELS = {
+  "send-text": "send-text",
+  "send-image": "send-image",
+  "send-video": "send-video",
+  "group-create": "group-create",
+  "group-metadata": "group-metadata",
+  "group-add-participant": "group-add-participant",
+  "group-remove-participant": "group-remove-participant",
+  "group-add-admin": "group-add-admin",
+  "group-remove-admin": "group-remove-admin",
+};
+
+async function loadToolsUsage() {
+  try {
+    const usage = await api("/tools-usage");
+    const grid = document.getElementById("tools-grid");
+    grid.innerHTML = Object.entries(TOOL_LABELS)
+      .map(([key, label]) => `<div class="tool-chip ${usage[key] ? "used" : ""}"><span class="dot"></span>${label}</div>`)
+      .join("");
+  } catch (err) {
+    // silencioso - nao interrompe o resto do painel por causa do checklist
+  }
+}
+
+setInterval(loadToolsUsage, 3000);
+loadToolsUsage();
 
 async function onCampaignChange() {
   const c = campaigns.find(x => x.id === selectedId);

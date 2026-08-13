@@ -188,12 +188,37 @@ async def list_tools() -> list[dict[str, Any]]:
     return await _with_retries("list_tools", _run)
 
 
+# As 9 tools confirmadas ao vivo (ver docs/zapi-mcp-capabilities.md) -
+# revalidar via list_tools() se a Z-API anunciar novas tools.
+KNOWN_TOOLS: tuple[str, ...] = (
+    "send-text",
+    "send-image",
+    "send-video",
+    "group-create",
+    "group-metadata",
+    "group-add-participant",
+    "group-remove-participant",
+    "group-add-admin",
+    "group-remove-admin",
+)
+
+# Em memoria de processo, so pra alimentar o checklist visual do painel
+# (GET /tools-usage) - nao precisa persistir, reinicia com o container.
+_used_tools: set[str] = set()
+
+
+def get_tool_usage() -> dict[str, bool]:
+    return {name: name in _used_tools for name in KNOWN_TOOLS}
+
+
 async def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
     async def _run(session: ClientSession) -> Any:
         result = await session.call_tool(tool_name, arguments=arguments)
         return result.model_dump()
 
-    return await _with_retries(f"call_tool({tool_name})", _run)
+    result = await _with_retries(f"call_tool({tool_name})", _run)
+    _used_tools.add(tool_name)
+    return result
 
 
 def parse_tool_payload(mcp_result: dict[str, Any]) -> dict[str, Any] | None:
