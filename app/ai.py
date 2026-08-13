@@ -55,3 +55,41 @@ async def interpret_intent(texto: str) -> Intent:
         logger.warning("Resposta inesperada da OpenAI para interpret_intent: %r", raw)
         return "UNCLEAR"
     return raw  # type: ignore[return-value]
+
+
+Confirmation = Literal["YES", "NO", "UNCLEAR"]
+_VALID_CONFIRMATIONS: set[str] = {"YES", "NO", "UNCLEAR"}
+
+_CONFIRMATION_SYSTEM_PROMPT = (
+    "Voce classifica a resposta de uma pessoa a uma pergunta de confirmacao "
+    "SIM/NAO generica (nao necessariamente sobre entrar em algo). Responda "
+    "com EXATAMENTE uma palavra: YES se a pessoa confirmar, NO se negar, "
+    "ou UNCLEAR se a resposta nao permitir concluir com seguranca. "
+    "Nunca responda outra coisa alem de YES, NO ou UNCLEAR."
+)
+
+
+async def interpret_confirmation(texto: str) -> Confirmation:
+    """Classificador SIM/NAO generico - usado por fluxos de confirmacao que
+    nao sao o convite inicial de entrada (ex.: confirmar saida de grupo,
+    #sairgrupozapi). Falha/ambiguidade -> UNCLEAR, mesmo principio do
+    `interpret_intent` (RN-004): nunca assumir confirmacao por erro do LLM."""
+    try:
+        completion = await _client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _CONFIRMATION_SYSTEM_PROMPT},
+                {"role": "user", "content": texto},
+            ],
+            max_tokens=5,
+            temperature=0,
+        )
+        raw = (completion.choices[0].message.content or "").strip().upper()
+    except Exception:
+        logger.exception("Falha ao chamar OpenAI para interpret_confirmation")
+        return "UNCLEAR"
+
+    if raw not in _VALID_CONFIRMATIONS:
+        logger.warning("Resposta inesperada da OpenAI para interpret_confirmation: %r", raw)
+        return "UNCLEAR"
+    return raw  # type: ignore[return-value]

@@ -59,6 +59,7 @@ class ContactOut(BaseModel):
     name: str | None
     consent_status: str
     membership_status: str
+    removal_pending: bool
 
     model_config = {"from_attributes": True}
 

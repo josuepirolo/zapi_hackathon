@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -61,6 +61,9 @@ class Contact(Base):
     consent_status: Mapped[ConsentStatus] = mapped_column(String, default=ConsentStatus.PENDING)
     consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     membership_status: Mapped[MembershipStatus] = mapped_column(String, default=MembershipStatus.NONE)
+    # True enquanto aguarda confirmacao SIM/NAO do fluxo #sairgrupozapi -
+    # ver app/webhook.py.
+    removal_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     last_message_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

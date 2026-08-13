@@ -191,7 +191,8 @@ function statusBadge(consent) {
   return `<span class="badge warn">AGUARDANDO</span>`;
 }
 
-function membershipBadge(membership) {
+function membershipBadge(membership, removalPending) {
+  if (removalPending) return `<span class="badge warn">CONFIRMANDO SAÍDA</span>`;
   if (membership === "ADDED") return `<span class="badge ok">NO GRUPO</span>`;
   if (membership === "REMOVED") return `<span class="badge danger">REMOVIDO</span>`;
   return `<span class="badge warn">—</span>`;
@@ -251,7 +252,7 @@ function renderContacts(contacts) {
       <td>${contact.name || contact.chat_lid}</td>
       <td>${contact.phone || "—"}</td>
       <td>${statusBadge(contact.consent_status)}</td>
-      <td>${membershipBadge(contact.membership_status)}</td>
+      <td>${membershipBadge(contact.membership_status, contact.removal_pending)}</td>
     `;
     tbody.appendChild(tr);
   }
