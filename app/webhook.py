@@ -49,7 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
-from app.ai import interpret_intent
+from app.ai import interpret_confirmation, interpret_intent
 from app.config import WEBHOOK_SHARED_SECRET
 from app.db import async_session
 from app.models import Campaign, ConsentStatus, Contact, MembershipStatus
@@ -57,6 +57,8 @@ from app.models import Campaign, ConsentStatus, Contact, MembershipStatus
 logger = logging.getLogger("delega.webhook")
 
 router = APIRouter()
+
+REMOVAL_TRIGGER = "#sairgrupozapi"
 
 
 def _check_secret(secret: str) -> None:
@@ -169,6 +171,74 @@ async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campa
     await session.commit()
 
 
+async def _start_removal_flow(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:
+    """Contato ja ADDED manda `#sairgrupozapi`: pergunta confirmacao antes
+    de remover - nunca remove direto de uma unica mensagem (mesmo
+    principio do consentimento de entrada: acao destrutiva exige
+    confirmacao explicita, RN-004)."""
+    contact.removal_pending = True
+    try:
+        await mcp_client.call_tool(
+            "send-text",
+            {
+                "phone": contact.chat_lid,
+                "message": f"Tem certeza que quer sair do grupo {campaign.name}? (responda SIM ou NAO)",
+            },
+        )
+    except Exception:
+        logger.exception("Falha ao perguntar confirmacao de saida via MCP para %s", contact.chat_lid)
+    await session.commit()
+
+
+async def _handle_removal_confirmation(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
+    confirmation = await interpret_confirmation(texto)
+
+    if confirmation == "YES":
+        if not campaign.whatsapp_group_id:
+            logger.warning("Confirmacao de saida para campanha %s sem whatsapp_group_id - nada a remover.", campaign.id)
+            contact.removal_pending = False
+            await session.commit()
+            return
+        target_phone = contact.phone or contact.chat_lid
+        try:
+            remove_result = await mcp_client.call_tool(
+                "group-remove-participant",
+                {"groupId": campaign.whatsapp_group_id, "phones": [target_phone]},
+            )
+        except Exception:
+            logger.exception("Falha ao remover %s do grupo via MCP", contact.chat_lid)
+            return  # mantem removal_pending=True, tenta de novo na proxima mensagem
+        if not mcp_client.tool_call_succeeded(remove_result):
+            logger.warning("group-remove-participant recusou %s: %r", contact.chat_lid, remove_result)
+            return
+        contact.membership_status = MembershipStatus.REMOVED
+        contact.removal_pending = False
+        try:
+            await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": "Voce foi removido do grupo."})
+        except Exception:
+            logger.exception("Falha ao confirmar remocao via MCP para %s", contact.chat_lid)
+
+    elif confirmation == "NO":
+        contact.removal_pending = False
+        try:
+            await mcp_client.call_tool(
+                "send-text", {"phone": contact.chat_lid, "message": "Combinado, voce continua no grupo."}
+            )
+        except Exception:
+            logger.exception("Falha ao confirmar permanencia via MCP para %s", contact.chat_lid)
+
+    else:  # UNCLEAR
+        try:
+            await mcp_client.call_tool(
+                "send-text",
+                {"phone": contact.chat_lid, "message": "Nao entendi. Quer mesmo sair do grupo? (responda SIM ou NAO)"},
+            )
+        except Exception:
+            logger.exception("Falha ao reperguntar confirmacao de saida via MCP para %s", contact.chat_lid)
+
+    await session.commit()
+
+
 async def _handle_pending_contact(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
     intent = await interpret_intent(texto)
 
@@ -240,6 +310,14 @@ async def on_message_received(secret: str, request: Request) -> JSONResponse:
 
         if contact is None:
             await _handle_new_contact(session, chat_lid, phone, texto)
+        elif contact.removal_pending:
+            campaign_result = await session.get(Campaign, contact.campaign_id)
+            if campaign_result is not None:
+                await _handle_removal_confirmation(session, contact, campaign_result, texto)
+        elif REMOVAL_TRIGGER in texto.lower() and contact.membership_status == MembershipStatus.ADDED:
+            campaign_result = await session.get(Campaign, contact.campaign_id)
+            if campaign_result is not None:
+                await _start_removal_flow(session, contact, campaign_result)
         elif contact.consent_status == ConsentStatus.PENDING:
             campaign_result = await session.get(Campaign, contact.campaign_id)
             if campaign_result is not None:
