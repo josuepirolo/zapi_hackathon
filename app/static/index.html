@@ -249,14 +249,11 @@ async function loadCampaigns(selectId) {
 function renderCampaignDetails(c) {
   const el = document.getElementById("campaign-details");
   const submitBtn = document.getElementById("content-submit");
-  const aiImageBtn = document.getElementById("ai-image-submit");
   if (!c) {
     el.innerHTML = "Nenhuma campanha selecionada.";
     submitBtn.disabled = true;
-    aiImageBtn.disabled = true;
     return;
   }
-  aiImageBtn.disabled = !c.whatsapp_group_id;
   const grupoStatus = c.whatsapp_group_id
     ? `<span class="badge ok">CRIADO</span>`
     : `<span class="badge warn">AGUARDANDO 1º ACEITE</span>`;
