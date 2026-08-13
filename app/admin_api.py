@@ -37,10 +37,6 @@ class CampaignCreate(BaseModel):
     trigger_keyword: str = Field(min_length=1)
     invitation_message: str
     welcome_message: str
-    # group-create do MCP recusa phones: [] com {"success":false,"message":
-    # "participants not found"} (confirmado ao vivo) - precisa de pelo
-    # menos um numero. Tipicamente o proprio numero do admin.
-    seed_phones: list[str] = Field(min_length=1)
 
 
 class CampaignOut(BaseModel):
@@ -72,24 +68,12 @@ class ContentCreate(BaseModel):
     text: str
 
 
-def _extract_group_id(mcp_result: dict) -> str | None:
-    payload = mcp_client.parse_tool_payload(mcp_result)
-    if payload is None:
-        logger.warning("Nao foi possivel parsear o retorno de group-create: %r", mcp_result)
-        return None
-    if payload.get("success") is False:
-        logger.warning("group-create retornou falha de negocio: %r", payload)
-        return None
-    for key in ("groupId", "id", "phone"):
-        value = payload.get(key)
-        if value:
-            return str(value)
-    logger.warning("group-create OK mas nenhuma chave de groupId conhecida no payload: %r", payload)
-    return None
-
-
 @router.post("", response_model=CampaignOut, status_code=201)
 async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(get_session)) -> Campaign:
+    # Sem group-create aqui: o grupo so existe quando o primeiro contato
+    # real aceita participar - ver app/webhook.py (RN-007). Evita precisar
+    # de um "seed_phones" artificial e o erro "participants not found" ao
+    # tentar adicionar o proprio numero da instancia como participante.
     campaign = Campaign(
         name=body.name,
         description=body.description,
@@ -98,16 +82,6 @@ async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(
         welcome_message=body.welcome_message,
     )
     session.add(campaign)
-    await session.flush()
-
-    try:
-        result = await mcp_client.call_tool(
-            "group-create", {"groupName": body.name, "phones": body.seed_phones, "autoInvite": True}
-        )
-        campaign.whatsapp_group_id = _extract_group_id(result)
-    except Exception:
-        logger.exception("Falha ao criar grupo via MCP para a campanha %s", campaign.id)
-
     await session.commit()
     await session.refresh(campaign)
     return campaign

@@ -110,8 +110,14 @@ porque fazem parte da superfície real do servidor.
 - **Achado crítico: `phones: []` é rejeitado.** Chamada real com array vazio
   retornou `{"success":false,"message":"participants not found"}` — o MCP
   exige pelo menos um participante para criar o grupo, não é possível criar
-  vazio e adicionar depois via `group-add-participant`. `app/admin_api.py`
-  agora exige `seed_phones` (mínimo 1) no `POST /campaigns`.
+  vazio e adicionar depois via `group-add-participant`.
+- **Achado crítico: o próprio número da instância também é rejeitado.**
+  Passar só o número conectado à instância como `phones` retornou o mesmo
+  erro `"participants not found"` — não dá pra se adicionar como
+  participante de si mesmo (você já é o dono/criador do grupo). Por isso
+  `app/webhook.py` não chama `group-create` em `POST /campaigns`; o grupo
+  só é criado no primeiro aceite real de um terceiro (RN-007), usando esse
+  contato como participante inicial.
 - **Achado crítico: formato real do retorno de `tools/call`.** O payload de
   negócio (`success`, mensagens de erro, IDs) não vem em chaves soltas do
   resultado — vem como uma **string JSON dentro de `content[0]['text']`**:
