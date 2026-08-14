@@ -55,6 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.ai import generate_promo_image_base64, interpret_confirmation, interpret_intent
+from app.campaign_defaults import ALREADY_MEMBER_MESSAGE
 from app.config import WEBHOOK_SHARED_SECRET
 from app.db import async_session
 from app.models import Campaign, ConsentStatus, Contact, MembershipStatus
@@ -111,7 +112,14 @@ async def _handle_new_contact(session: AsyncSession, chat_lid: str, phone: str |
     await session.commit()
 
 
-async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool:
+async def _lock_campaign(session: AsyncSession, campaign_id: int) -> Campaign | None:
+    """Carrega a campanha com lock de linha — evita dois group-create
+    concorrentes quando dois webhooks processam aceite ao mesmo tempo."""
+    result = await session.execute(select(Campaign).where(Campaign.id == campaign_id).with_for_update())
+    return result.scalar_one_or_none()
+
+
+async def _ensure_group_membership(session: AsyncSession, contact: Contact, campaign: Campaign) -> bool:
     """Garante que `contact` esta no grupo da campanha - cria o grupo se
     for o primeiro membro (RN-007), ou adiciona a um grupo ja existente.
     Retorna True e marca `membership_status=ADDED` só em sucesso confirmado
@@ -126,6 +134,10 @@ async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool
     mesmo com um contato real (achado ao vivo 2026-08-13); a correlacao
     interna continua por `chat_lid` (ADR-0001), so o parametro enviado ao
     MCP muda."""
+    locked = await _lock_campaign(session, campaign.id)
+    if locked is None:
+        return False
+    campaign = locked
     target_phone = contact.phone or contact.chat_lid
 
     if campaign.whatsapp_group_id:
@@ -157,6 +169,7 @@ async def _ensure_group_membership(contact: Contact, campaign: Campaign) -> bool
         logger.warning("group-create nao retornou groupId utilizavel: %r", create_result)
         return False
     campaign.whatsapp_group_id = group_id
+    await session.flush()  # persiste group_id antes de boas-vindas / 2o webhook
     contact.membership_status = MembershipStatus.ADDED
     return True
 
@@ -189,6 +202,12 @@ async def _send_group_welcome(campaign: Campaign) -> None:
         )
     except Exception:
         logger.exception("Falha ao enviar imagem de boas-vindas via MCP no grupo %s", campaign.whatsapp_group_id)
+        try:
+            await mcp_client.call_tool(
+                "send-text", {"phone": campaign.whatsapp_group_id, "message": campaign.welcome_message}
+            )
+        except Exception:
+            logger.exception("Falha no fallback send-text de boas-vindas no grupo %s", campaign.whatsapp_group_id)
 
 
 async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:
@@ -198,7 +217,7 @@ async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campa
     tenta de novo, em vez de ficar preso pra sempre - sem exigir
     intervencao manual no banco."""
     logger.info("Retentando adicao ao grupo para %s (ACCEPTED, membership_status=NONE).", contact.chat_lid)
-    if await _ensure_group_membership(contact, campaign):
+    if await _ensure_group_membership(session, contact, campaign):
         await _send_group_welcome(campaign)
     await session.commit()
 
@@ -287,11 +306,27 @@ async def _handle_reentry(session: AsyncSession, contact: Contact, campaign: Cam
     await session.commit()
 
 
+async def _handle_already_member(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
+    """Contato ja no grupo manda palavra-chave de novo (ex.: clicou na landing
+    outra vez) — responde sem criar grupo nem reiniciar consentimento."""
+    if campaign.trigger_keyword.lower() not in texto.lower():
+        return
+    try:
+        await mcp_client.call_tool("send-text", {"phone": contact.chat_lid, "message": ALREADY_MEMBER_MESSAGE})
+    except Exception:
+        logger.exception("Falha ao enviar mensagem de ja-membro via MCP para %s", contact.chat_lid)
+    await session.commit()
+
+
 async def _handle_pending_contact(session: AsyncSession, contact: Contact, campaign: Campaign, texto: str) -> None:
+    await session.refresh(contact)
+    if contact.consent_status != ConsentStatus.PENDING:
+        return
+
     intent = await interpret_intent(texto)
 
     if intent == "ACCEPT":
-        if not await _ensure_group_membership(contact, campaign):
+        if not await _ensure_group_membership(session, contact, campaign):
             return  # nao avanca consent_status se a adicao/criacao falhar
 
         contact.consent_status = ConsentStatus.ACCEPTED
@@ -371,6 +406,10 @@ async def on_message_received(secret: str, request: Request) -> JSONResponse:
             campaign_result = await session.get(Campaign, contact.campaign_id)
             if campaign_result is not None:
                 await _retry_stuck_acceptance(session, contact, campaign_result)
+        elif contact.consent_status == ConsentStatus.ACCEPTED and contact.membership_status == MembershipStatus.ADDED:
+            campaign_result = await session.get(Campaign, contact.campaign_id)
+            if campaign_result is not None:
+                await _handle_already_member(session, contact, campaign_result, texto)
         elif (
             contact.membership_status == MembershipStatus.REMOVED or contact.consent_status == ConsentStatus.DECLINED
         ):

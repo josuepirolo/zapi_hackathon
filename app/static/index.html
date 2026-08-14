@@ -124,7 +124,7 @@
 
 <header>
   <h1>Gestão de Grupo de WhatsApp</h1>
-  <p>Painel administrativo — DELEGA (Desafio MCP Z-API 2026)</p>
+  <p>Painel demo MCP — criar/excluir campanhas, acoes nos participantes e checklist de tools.</p>
 </header>
 
 <main>
@@ -140,21 +140,20 @@
     <details style="margin-top: 14px;">
       <summary>+ Nova campanha</summary>
       <form id="new-campaign-form">
-        <label>Nome</label>
-        <input name="name" required />
-        <label>Descrição</label>
-        <input name="description" />
-        <label>Palavra-chave (só quem mandar essa palavra inicia o fluxo)</label>
-        <input name="trigger_keyword" required placeholder="ex.: #desafiozapi" />
-        <label>Mensagem de convite</label>
-        <textarea name="invitation_message" required></textarea>
-        <label>Mensagem de boas-vindas (legenda da imagem IA enviada no grupo ao aceitar)</label>
-        <textarea name="welcome_message" required></textarea>
+        <label>Nome do grupo / campanha</label>
+        <input name="name" required placeholder="ex.: Promoções Z-API" />
+        <p class="muted" style="margin: 8px 0 0;">Mensagens do fluxo e palavra-chave são fixas — o opt-in começa em <a href="/participar" target="_blank">/participar</a>.</p>
         <div class="row" style="margin-top: 12px;">
           <button type="submit">Criar campanha</button>
         </div>
       </form>
     </details>
+  </section>
+
+  <section class="card">
+    <h2>Tools MCP usadas nesta sessão</h2>
+    <p class="muted" style="margin-top:-6px;">Verde = tool já chamada com sucesso neste deploy (fluxo + ações abaixo).</p>
+    <div class="tools-grid" id="tools-grid"></div>
   </section>
 
   <section class="card">
@@ -169,19 +168,11 @@
   </section>
 
   <section class="card">
-    <h2>Tools MCP usadas nesta sessão</h2>
-    <div class="tools-grid" id="tools-grid"></div>
-  </section>
-
-  <section class="card">
-    <h2>Conteúdo</h2>
-    <p class="muted" style="margin-top:-6px;">Envia uma mensagem de texto pro grupo da campanha selecionada.</p>
-    <form id="content-form">
-      <textarea name="text" placeholder="Texto da mensagem" required></textarea>
-      <div class="row" style="margin-top: 10px;">
-        <button type="submit" id="content-submit">Enviar</button>
-      </div>
-    </form>
+    <h2>Ações MCP (checklist)</h2>
+    <p class="muted" style="margin-top:-6px;">Dispara tools manualmente quando o grupo já existir.</p>
+    <div class="row">
+      <button type="button" id="content-submit" disabled>Enviar mensagem no grupo (send-text)</button>
+    </div>
   </section>
 
 </main>
@@ -259,10 +250,9 @@ function renderCampaignDetails(c) {
     : `<span class="badge warn">AGUARDANDO 1º ACEITE</span>`;
   el.innerHTML = `
     <div class="status-line">
-      <div>Palavra-chave<br><b>${c.trigger_keyword}</b></div>
       <div>Grupo WhatsApp<br><b>${grupoStatus}</b></div>
+      <div>Opt-in<br><b><a href="/participar" target="_blank">/participar</a></b></div>
     </div>
-    ${c.description ? `<div>${c.description}</div>` : ""}
   `;
   submitBtn.disabled = !c.whatsapp_group_id;
 }
@@ -382,24 +372,22 @@ document.getElementById("new-campaign-form").addEventListener("submit", async (e
   }
 });
 
-document.getElementById("content-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+document.getElementById("content-submit").addEventListener("click", async () => {
   if (!selectedId) return;
-  const text = new FormData(e.target).get("text");
   const btn = document.getElementById("content-submit");
   btn.disabled = true;
   try {
     await api(`/campaigns/${selectedId}/content`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "text", text }),
+      body: JSON.stringify({ kind: "text" }),
     });
-    toast("Mensagem enviada.");
-    e.target.reset();
+    toast("Mensagem enviada (send-text).");
+    loadToolsUsage();
   } catch (err) {
     toast("Erro ao enviar: " + err.message, true);
   } finally {
-    btn.disabled = false;
+    btn.disabled = !campaigns.find(c => c.id === selectedId)?.whatsapp_group_id;
   }
 });
 

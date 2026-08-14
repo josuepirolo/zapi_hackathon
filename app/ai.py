@@ -114,8 +114,8 @@ async def generate_promo_image_base64() -> str | None:
         result = await _client.images.generate(
             model=_IMAGE_MODEL,
             prompt=_PROMO_IMAGE_PROMPT,
-            size="1024x1024",
-            quality="medium",
+            size="512x512",
+            quality="low",
         )
         b64 = result.data[0].b64_json
         if not b64:

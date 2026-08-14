@@ -19,6 +19,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
+from app.campaign_defaults import (
+    DEMO_GROUP_MESSAGE,
+    INVITATION_MESSAGE,
+    LANDING_DESCRIPTION,
+    TRIGGER_KEYWORD,
+    WELCOME_MESSAGE,
+)
 from app.db import get_session
 from app.models import Campaign, Contact, MembershipStatus
 
@@ -28,15 +35,7 @@ router = APIRouter(prefix="/campaigns", tags=["admin"])
 
 
 class CampaignCreate(BaseModel):
-    name: str
-    description: str | None = None
-    # Mensagem de contato novo so inicia consentimento se contiver essa
-    # palavra (case-insensitive) - ver app/webhook.py, RN-006. Sem isso,
-    # qualquer mensagem de qualquer numero desconhecido virava convite
-    # automatico (incidente real 2026-08-13).
-    trigger_keyword: str = Field(min_length=1)
-    invitation_message: str
-    welcome_message: str
+    name: str = Field(min_length=1)
 
 
 class CampaignOut(BaseModel):
@@ -67,7 +66,7 @@ class ContactOut(BaseModel):
 
 class ContentCreate(BaseModel):
     kind: Literal["text"] = "text"
-    text: str = Field(min_length=1)
+    text: str | None = None
 
 
 @router.post("", response_model=CampaignOut, status_code=201)
@@ -78,10 +77,10 @@ async def create_campaign(body: CampaignCreate, session: AsyncSession = Depends(
     # tentar adicionar o proprio numero da instancia como participante.
     campaign = Campaign(
         name=body.name,
-        description=body.description,
-        trigger_keyword=body.trigger_keyword,
-        invitation_message=body.invitation_message,
-        welcome_message=body.welcome_message,
+        description=LANDING_DESCRIPTION,
+        trigger_keyword=TRIGGER_KEYWORD,
+        invitation_message=INVITATION_MESSAGE,
+        welcome_message=WELCOME_MESSAGE,
     )
     session.add(campaign)
     await session.commit()
@@ -107,7 +106,8 @@ async def send_content(campaign_id: int, body: ContentCreate, session: AsyncSess
     if campaign is None or campaign.whatsapp_group_id is None:
         raise HTTPException(status_code=404, detail="Campanha ou grupo nao encontrado")
 
-    result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": body.text})
+    message = body.text or DEMO_GROUP_MESSAGE
+    result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": message})
 
     return {"status": "sent", "mcp_result": result}
 

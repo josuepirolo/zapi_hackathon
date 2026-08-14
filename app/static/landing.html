@@ -73,11 +73,11 @@
 <div class="card">
   <span class="badge">Novidade</span>
   <h1 id="title">Entre no nosso grupo de promoções</h1>
-  <p class="lead" id="subtitle">Receba ofertas e novidades exclusivas direto no seu WhatsApp — é só um clique.</p>
+  <p class="lead" id="subtitle">Clique abaixo para entrar no grupo de promoções no WhatsApp — você confirma o convite e pronto.</p>
 
   <div id="cta-area"><p class="loading">Carregando…</p></div>
 
-  <p class="footnote">Ao clicar, uma conversa de WhatsApp abre com uma mensagem pronta — é só enviar.</p>
+  <p class="footnote">Ao clicar, o WhatsApp abre com uma mensagem pronta. Envie para iniciar sua entrada no grupo.</p>
 </div>
 
 <script>
@@ -100,7 +100,7 @@ async function init() {
     if (campaign.description) document.getElementById("subtitle").textContent = campaign.description;
 
     const link = `https://wa.me/${INSTANCE_PHONE}?text=${encodeURIComponent(campaign.trigger_keyword)}`;
-    ctaArea.innerHTML = `<a class="cta" href="${link}" target="_blank" rel="noopener">${WHATSAPP_ICON} Quero participar</a>`;
+    ctaArea.innerHTML = `<a class="cta" href="${link}" target="_blank" rel="noopener">${WHATSAPP_ICON} Entrar no grupo</a>`;
   } catch (err) {
     ctaArea.innerHTML = `<p class="loading">Não foi possível carregar agora.</p>`;
   }
