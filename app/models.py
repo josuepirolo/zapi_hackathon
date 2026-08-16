@@ -92,8 +92,15 @@ class ChatConsentSession(Base):
     browser_session_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     token: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     phone: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
     status: Mapped[ChatLinkStatus] = mapped_column(String, default=ChatLinkStatus.PENDING)
+    # "admin"/"member" se o telefone ja estava no grupo quando o link foi
+    # gerado; None = fluxo normal de entrada. So descoberto/informado DEPOIS
+    # do clique no link - nunca no momento do pedido, pra alguem nao poder
+    # digitar o numero de outra pessoa no chat publico e descobrir se aquele
+    # numero ja esta no grupo/e admin sem provar que e o dono dele.
+    existing_member_kind: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

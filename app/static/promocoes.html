@@ -520,7 +520,7 @@ async function pollConsent() {
     if (data.status === "accepted") {
       stopConsentPoll();
       setWaiting(null);
-      const msg = "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
+      const msg = data.message || "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
       addAssistant(msg, data.tools_used || ["send-text", "group-add-participant", "send-image"]);
       history.push({ role: "assistant", content: msg });
       reenableAfterConsent();
@@ -538,17 +538,20 @@ async function pollConsent() {
 }
 
 function showWelcomeAndPrivacy(intro) {
-  addAssistant(intro, []);
-  addAssistant(
+  const privacy =
     "🔒 Sua privacidade importa. Vamos usar seu WhatsApp só pra verificar seu acesso e realizar esta experiência de " +
-    "demonstração — seus dados não são compartilhados e você pode encerrar sua participação quando quiser.",
-    []
-  );
-  addAssistant(
-    "Se quiser entrar, me passa seu WhatsApp com DDI (ex.: 5544***9999). Envio um link de confirmação no celular — " +
-    "ao tocar nele, confirmo aqui no chat. Quer participar?",
-    []
-  );
+    "demonstração — seus dados não são compartilhados e você pode encerrar sua participação quando quiser.";
+  const askName = "Antes de começarmos: qual é o seu primeiro nome?";
+  addAssistant(intro, []);
+  addAssistant(privacy, []);
+  addAssistant(askName, []);
+  // Precisa entrar no `history` (nao so aparecer na tela) pra chegar de
+  // volta pro backend no proximo /api/chat - e o que permite ao agente
+  // (ver `_extract_name_from_history` em chat_agent.py) identificar a
+  // resposta do visitante como sendo o nome dele.
+  history.push({ role: "assistant", content: intro });
+  history.push({ role: "assistant", content: privacy });
+  history.push({ role: "assistant", content: askName });
 }
 
 function openChat() {

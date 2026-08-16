@@ -256,6 +256,38 @@ def _should_send_whatsapp_invite(history: list[dict[str, str]], user_message: st
     return None
 
 
+_NAME_ASK_RE = re.compile(r"\bnome\b", re.IGNORECASE)
+_NAME_STRIP_RE = re.compile(r"[^A-Za-zÀ-ÖØ-öø-ÿ'’-]")
+
+
+def _looks_like_phone_or_digits(text: str) -> bool:
+    return len(re.sub(r"\D", "", text)) >= 8
+
+
+def _extract_name_from_history(history: list[dict[str, str]], user_message: str) -> str | None:
+    """Acha o primeiro nome do visitante procurando, de tras pra frente, o
+    ultimo par (assistente perguntou o nome) -> (visitante respondeu).
+    Nunca confia que a resposta veio no formato certo — pega so o primeiro
+    token e normaliza pra Xxxxx via `.capitalize()` (Unicode-aware, cobre
+    acentuacao: "joão" -> "João", "MARIA CLARA" -> "Maria")."""
+    combined = [*history[-16:], {"role": "user", "content": user_message}]
+    for i in range(len(combined) - 1, 0, -1):
+        item = combined[i]
+        prev = combined[i - 1]
+        if item.get("role") != "user" or prev.get("role") != "assistant":
+            continue
+        if not _NAME_ASK_RE.search((prev.get("content") or "")):
+            continue
+        raw = (item.get("content") or "").strip()
+        if not raw or _looks_like_phone_or_digits(raw):
+            continue
+        first_token = raw.split()[0]
+        cleaned = _NAME_STRIP_RE.sub("", first_token)
+        if cleaned:
+            return cleaned.capitalize()
+    return None
+
+
 def _build_system_prompt(campaign: Campaign | None) -> str:
     if campaign and campaign.whatsapp_group_id:
         group_line = (
@@ -280,12 +312,17 @@ Objetivo: conversar de forma calorosa, explicar o beneficio do grupo de novidade
 e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente acoes).
 
 Fluxo sugerido:
-1. Apresente-se e pergunte se a pessoa quer receber novidades sobre IA/MCP no WhatsApp.
-2. Se sim, peca o WhatsApp com DDI (ex.: 5511***9999) — confirme o numero antes de agir.
-3. Com telefone confirmado, o sistema envia automaticamente um link de confirmacao no WhatsApp.
+1. O site ja mandou as boas-vindas, o aviso de privacidade (LGPD) e perguntou o primeiro nome da
+   pessoa antes de voce entrar na conversa — a primeira mensagem que voce recebe do visitante e
+   essa resposta (o nome). Use-o pra se dirigir a pessoa dai em diante (ex.: "Prazer, Joao!").
+2. Pergunte se ela quer receber novidades sobre IA/MCP no WhatsApp.
+3. Se sim, peca o WhatsApp com DDI (ex.: 5511***9999) — confirme o numero antes de agir.
+4. Com telefone confirmado, o sistema envia automaticamente um link de confirmacao no WhatsApp.
    A confirmacao e o visitante abrir esse link no celular — nao e codigo numerico nem SIM/NAO no privado.
-4. Enquanto o link nao for aberto, o chat no site fica aguardando (polling).
-5. Nunca diga que enviou link sem o backend ter disparado send-text.
+5. Enquanto o link nao for aberto, o chat no site fica aguardando (polling).
+6. Nunca diga que enviou link sem o backend ter disparado send-text.
+7. Voce nunca sabe, nesta etapa, se o numero ja faz parte do grupo ou e admin — so o backend
+   descobre isso depois que o link for clicado. Nunca especule sobre isso.
 
 Contexto fixo:
 - Palavra-chave opt-in alternativa: {TRIGGER_KEYWORD}
@@ -297,7 +334,7 @@ Regras:
 - Responda sempre em portugues do Brasil, frases curtas, tom profissional e amigavel.
 - Ao usar uma tool, diga na resposta final o que fez (ex.: "Enviei convite no WhatsApp").
 - Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
-- Nao peca dados sensiveis alem do telefone WhatsApp para este demo.
+- Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
 - Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos."""
 
 
@@ -319,8 +356,9 @@ async def run_chat_turn(
 
     confirmed_phone = _should_send_whatsapp_invite(history, user_message)
     if confirmed_phone:
+        visitor_name = _extract_name_from_history(history, user_message)
         ok, auto_reply, auto_tools, consent_status = await start_tracked_consent(
-            session, browser_session_id, confirmed_phone
+            session, browser_session_id, confirmed_phone, visitor_name
         )
         return ChatTurnResult(reply=auto_reply, tools_used=auto_tools, consent_status=consent_status)
 
