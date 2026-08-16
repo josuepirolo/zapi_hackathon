@@ -283,20 +283,47 @@ function setChatInputEnabled(on) {
 }
 
 function onTurnstileVerified() {
+  if (humanVerified) return;
+  if (typeof turnstile === "undefined" || turnstileWidgetId === null) return;
+
+  const token = turnstile.getResponse(turnstileWidgetId);
+  if (!token) return;
+
+  fetch("/api/chat/verify-human", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: browserSessionId, turnstile_token: token }),
+  })
+    .then((resp) => resp.json().then((data) => ({ resp, data })))
+    .then(({ resp, data }) => {
+      if (!resp.ok) {
+        addAssistant("Não passou na verificação anti-bot. Tente de novo.", []);
+        if (turnstileWidgetId !== null) turnstile.reset(turnstileWidgetId);
+        return;
+      }
+      if (data.session_id) {
+        browserSessionId = data.session_id;
+        localStorage.setItem("delega_chat_session", browserSessionId);
+      }
+      unlockChatAfterHuman();
+    })
+    .catch(() => {
+      addAssistant("Erro na verificação anti-bot. Recarregue a página.", []);
+    });
+}
+
+function unlockChatAfterHuman() {
+  humanVerified = true;
   const section = document.getElementById("turnstile-section");
-  const hint = document.getElementById("turnstile-hint");
-  if (!humanVerified) {
-    humanVerified = true;
-    section.classList.remove("locked");
-    setChatInputEnabled(true);
-    hint.textContent = "Antes de cada mensagem, marque o botão de novo (proteção anti-bot).";
-    addAssistant(
-      "Show! Agora sim — sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-      "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
-      []
-    );
-    inputEl.focus();
-  }
+  section.classList.remove("locked");
+  section.style.display = "none";
+  setChatInputEnabled(true);
+  addAssistant(
+    "Show! Agora sim — sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+    "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
+    []
+  );
+  inputEl.focus();
 }
 
 function onTurnstileExpired() {
@@ -306,8 +333,37 @@ function onTurnstileExpired() {
   }
 }
 
+async function checkExistingHumanVerification() {
+  if (!turnstileEnabled) {
+    humanVerified = true;
+    document.getElementById("turnstile-section").style.display = "none";
+    setChatInputEnabled(true);
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/chat/human/${encodeURIComponent(browserSessionId)}`);
+    const data = await resp.json();
+    if (data.session_id) {
+      browserSessionId = data.session_id;
+      localStorage.setItem("delega_chat_session", browserSessionId);
+    }
+    if (data.verified) {
+      humanVerified = true;
+      document.getElementById("turnstile-section").style.display = "none";
+      setChatInputEnabled(true);
+    } else {
+      setChatInputEnabled(false);
+      document.getElementById("turnstile-section").style.display = "";
+      ensureTurnstileWidget();
+    }
+  } catch (err) {
+    setChatInputEnabled(false);
+    ensureTurnstileWidget();
+  }
+}
+
 function ensureTurnstileWidget() {
-  if (!turnstileEnabled || !turnstileSiteKey || turnstileWidgetId !== null) return;
+  if (!turnstileEnabled || humanVerified || !turnstileSiteKey || turnstileWidgetId !== null) return;
   if (typeof turnstile === "undefined") return;
   turnstileWidgetId = turnstile.render("#turnstile-box", {
     sitekey: turnstileSiteKey,
@@ -315,12 +371,6 @@ function ensureTurnstileWidget() {
     callback: onTurnstileVerified,
     "expired-callback": onTurnstileExpired,
   });
-}
-
-function resetTurnstileWidget() {
-  if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
-    turnstile.reset(turnstileWidgetId);
-  }
 }
 
 function stopConsentPoll() {
@@ -374,34 +424,33 @@ async function pollConsent() {
 function openChat() {
   panel.classList.add("open");
   overlay.classList.add("open");
-  loadChatConfig().then(() => {
-    if (turnstileEnabled) {
-      setChatInputEnabled(false);
-      document.getElementById("turnstile-section").style.display = "";
-      ensureTurnstileWidget();
-    } else {
-      humanVerified = true;
-      document.getElementById("turnstile-section").style.display = "none";
-      setChatInputEnabled(true);
+  loadChatConfig().then(async () => {
+    await checkExistingHumanVerification();
+    if (!opened) {
+      opened = true;
+      if (humanVerified) {
+        addAssistant(
+          "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+          "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
+          []
+        );
+      } else if (turnstileEnabled) {
+        addAssistant(
+          "Olá! Antes de começarmos, clique no botão logo abaixo para confirmar que você não é um robô — " +
+          "é rapidinho, prometo! Depois disso você conversa normalmente, sem repetir.",
+          []
+        );
+        ensureTurnstileWidget();
+      } else {
+        addAssistant(
+          "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+          "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
+          []
+        );
+      }
     }
+    if (humanVerified) inputEl.focus();
   });
-  if (!opened) {
-    opened = true;
-    if (turnstileEnabled) {
-      addAssistant(
-        "Olá! Antes de começarmos, clique no botão logo abaixo para confirmar que você não é um robô — " +
-        "é rapidinho, prometo! Assim que passar, continuamos com as promoções no WhatsApp.",
-        []
-      );
-    } else {
-      addAssistant(
-        "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-        "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
-        []
-      );
-    }
-  }
-  if (humanVerified) inputEl.focus();
 }
 
 function closeChat() {
@@ -454,24 +503,10 @@ async function send() {
   if (!text) return;
 
   await loadChatConfig();
-  ensureTurnstileWidget();
-
   if (turnstileEnabled && !humanVerified) {
-    addAssistant("Primeiro clique no botão anti-bot abaixo — é rapidinho!", []);
+    addAssistant("Primeiro clique no botão anti-bot abaixo — só uma vez!", []);
+    ensureTurnstileWidget();
     return;
-  }
-
-  let turnstileToken = null;
-  if (turnstileEnabled) {
-    if (typeof turnstile === "undefined" || turnstileWidgetId === null) {
-      addAssistant("Aguarde o botão anti-bot carregar.", []);
-      return;
-    }
-    turnstileToken = turnstile.getResponse(turnstileWidgetId);
-    if (!turnstileToken) {
-      addAssistant("Marque o botão anti-bot abaixo antes de enviar.", []);
-      return;
-    }
   }
 
   inputEl.value = "";
@@ -487,13 +522,11 @@ async function send() {
         message: text,
         history,
         session_id: browserSessionId,
-        turnstile_token: turnstileToken,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) {
       addAssistant("Erro: " + apiErrorMessage(data, resp.statusText), []);
-      resetTurnstileWidget();
       return;
     }
     if (data.session_id) {
@@ -507,7 +540,6 @@ async function send() {
     if (data.consent_status === "waiting") {
       startConsentPoll();
     }
-    resetTurnstileWidget();
   } catch (err) {
     addAssistant("Não foi possível conectar. Tente novamente.", []);
   } finally {

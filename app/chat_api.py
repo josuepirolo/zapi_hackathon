@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat_agent import run_chat_turn
-from app.chat_consent import accept_consent_by_token, get_consent_poll_status, normalize_browser_session_id
+from app.chat_consent import (
+    accept_consent_by_token,
+    get_consent_poll_status,
+    is_human_verified,
+    mark_human_verified,
+    normalize_browser_session_id,
+)
 from app.config import (
     CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE,
     CHAT_POLL_RATE_LIMIT_PER_MINUTE,
@@ -42,9 +48,19 @@ def _rate_limit_or_429(request: Request, bucket: str, max_calls: int, window_sec
         raise HTTPException(status_code=429, detail="Muitas requisicoes. Aguarde um minuto e tente de novo.")
 
 
-async def _verify_human(request: Request, turnstile_token: str | None) -> None:
+async def _verify_turnstile_token(request: Request, turnstile_token: str | None) -> None:
     if not await verify_turnstile(turnstile_token, _client_ip(request)):
         raise HTTPException(status_code=403, detail="Verificacao anti-bot falhou. Recarregue a pagina e tente de novo.")
+
+
+async def _require_human_session(db: AsyncSession, browser_session_id: str) -> None:
+    if not TURNSTILE_ENABLED:
+        return
+    if not await is_human_verified(db, browser_session_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Complete a verificacao anti-bot no chat antes de enviar mensagens.",
+        )
 
 
 class ChatPublicConfig(BaseModel):
@@ -61,7 +77,21 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[HistoryMessage] = Field(default_factory=list, max_length=40)
     session_id: str | None = Field(default=None, max_length=64)
-    turnstile_token: str | None = Field(default=None, max_length=4096)
+
+
+class VerifyHumanRequest(BaseModel):
+    session_id: str | None = Field(default=None, max_length=64)
+    turnstile_token: str = Field(min_length=1, max_length=4096)
+
+
+class VerifyHumanResponse(BaseModel):
+    ok: bool
+    session_id: str
+
+
+class HumanStatusResponse(BaseModel):
+    verified: bool
+    session_id: str
 
 
 class ChatResponse(BaseModel):
@@ -93,6 +123,33 @@ async def chat_public_config() -> ChatPublicConfig:
     )
 
 
+@router.get("/chat/human/{session_id}", response_model=HumanStatusResponse)
+async def human_verification_status(
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> HumanStatusResponse:
+    browser_session_id = normalize_browser_session_id(session_id)
+    verified = await is_human_verified(session, browser_session_id) if TURNSTILE_ENABLED else True
+    return HumanStatusResponse(verified=verified, session_id=browser_session_id)
+
+
+@router.post("/chat/verify-human", response_model=VerifyHumanResponse)
+async def verify_human_once(
+    body: VerifyHumanRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> VerifyHumanResponse:
+    _rate_limit_or_429(request, "chat_verify_human", 10)
+    if not TURNSTILE_ENABLED:
+        browser_session_id = normalize_browser_session_id(body.session_id)
+        return VerifyHumanResponse(ok=True, session_id=browser_session_id)
+
+    await _verify_turnstile_token(request, body.turnstile_token)
+    browser_session_id = normalize_browser_session_id(body.session_id)
+    await mark_human_verified(session, browser_session_id)
+    return VerifyHumanResponse(ok=True, session_id=browser_session_id)
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def public_chat(
     body: ChatRequest,
@@ -100,9 +157,9 @@ async def public_chat(
     session: AsyncSession = Depends(get_session),
 ) -> ChatResponse:
     _rate_limit_or_429(request, "chat_post", CHAT_RATE_LIMIT_PER_MINUTE)
-    await _verify_human(request, body.turnstile_token)
-
     browser_session_id = normalize_browser_session_id(body.session_id)
+    await _require_human_session(session, browser_session_id)
+
     history = [{"role": m.role, "content": m.content} for m in body.history]
     result = await run_chat_turn(session, history, body.message.strip(), browser_session_id)
     status = result.consent_status
@@ -143,7 +200,7 @@ async def accept_chat_consent(
     session: AsyncSession = Depends(get_session),
 ) -> ConsentAcceptResponse:
     _rate_limit_or_429(request, "chat_accept", CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE)
-    await _verify_human(request, body.turnstile_token)
+    await _verify_turnstile_token(request, body.turnstile_token)
 
     token = token.strip()
     if not token or len(token) > 128:

@@ -19,13 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.campaign_defaults import WELCOME_MESSAGE
-from app.config import CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
-from app.models import Campaign, ChatConsentSession, ChatLinkStatus
+from app.config import CHAT_HUMAN_VERIFY_TTL_HOURS, CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
+from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
 from app.webhook import _lock_campaign, _send_group_welcome
 
 logger = logging.getLogger("delega.chat_consent")
 
 _CONSENT_TTL = timedelta(minutes=CONSENT_LINK_TTL_MINUTES)
+_HUMAN_VERIFY_TTL = timedelta(hours=CHAT_HUMAN_VERIFY_TTL_HOURS)
 
 
 def normalize_browser_session_id(raw: str | None) -> str:
@@ -240,3 +241,33 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
 
     logger.info("Chat link aceito token=%s phone=%s session=%s", token, record.phone, record.browser_session_id)
     return True, "Pronto! Voce entrou no grupo de promocoes. Pode voltar ao chat no site."
+
+
+async def is_human_verified(session: AsyncSession, browser_session_id: str) -> bool:
+    now = datetime.now(timezone.utc)
+    row = await session.get(ChatHumanVerification, browser_session_id)
+    if row is None:
+        return False
+    if row.expires_at < now:
+        await session.delete(row)
+        await session.commit()
+        return False
+    return True
+
+
+async def mark_human_verified(session: AsyncSession, browser_session_id: str) -> None:
+    now = datetime.now(timezone.utc)
+    expires = now + _HUMAN_VERIFY_TTL
+    row = await session.get(ChatHumanVerification, browser_session_id)
+    if row is None:
+        session.add(
+            ChatHumanVerification(
+                browser_session_id=browser_session_id,
+                verified_at=now,
+                expires_at=expires,
+            )
+        )
+    else:
+        row.verified_at = now
+        row.expires_at = expires
+    await session.commit()

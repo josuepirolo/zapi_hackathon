@@ -93,3 +93,13 @@ class ChatConsentSession(Base):
     status: Mapped[ChatLinkStatus] = mapped_column(String, default=ChatLinkStatus.PENDING)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatHumanVerification(Base):
+    """Turnstile ok uma vez por sessao do browser — nao repete a cada mensagem."""
+
+    __tablename__ = "chat_human_verifications"
+
+    browser_session_id: Mapped[str] = mapped_column(String, primary_key=True)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
