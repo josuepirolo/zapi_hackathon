@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 
 from app import mcp_client
 from app.admin_api import router as admin_router
+from app.chat_api import router as chat_router
 from app.db import init_models
 from app.webhook import router as webhook_router
 
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="DELEGA - Gestao de Grupo de WhatsApp com Consentimento", lifespan=lifespan)
 app.include_router(webhook_router)
 app.include_router(admin_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")
@@ -57,3 +59,8 @@ async def panel() -> FileResponse:
 @app.get("/participar")
 async def landing() -> FileResponse:
     return FileResponse(STATIC_DIR / "landing.html")
+
+
+@app.get("/promocoes")
+async def promocoes() -> FileResponse:
+    return FileResponse(STATIC_DIR / "promocoes.html")
