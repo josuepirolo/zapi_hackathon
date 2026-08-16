@@ -133,42 +133,71 @@ async def _detect_existing_participant(
 
 async def _create_personal_group(
     session: AsyncSession, campaign: Campaign, phone: str, record: ChatConsentSession
-) -> str | None:
-    """Cria grupo exclusivo (admin da instancia + 1 participante)."""
+) -> tuple[str | None, str | None]:
+    """Cria grupo exclusivo (admin da instancia + 1 participante).
+
+    Retorna (group_id, erro_mcp) — tenta variantes do 9o digito BR."""
     group_name = await _next_group_name(session, campaign)
-    try:
-        create_result = await mcp_client.call_tool(
-            "group-create",
-            {"groupName": group_name, "phones": [phone], "autoInvite": True},
+    last_error: str | None = None
+
+    for candidate in mcp_client.mcp_phone_candidates(phone):
+        try:
+            create_result = await mcp_client.call_tool(
+                "group-create",
+                {"groupName": group_name, "phones": [candidate], "autoInvite": True},
+            )
+        except Exception:
+            logger.exception("Chat link: falha group-create para %s", candidate)
+            continue
+
+        last_error = mcp_client.mcp_error_message(create_result) or last_error
+        group_id = mcp_client.extract_group_id(create_result)
+        if group_id is None:
+            logger.warning(
+                "Chat link: group-create recusou candidato %s (original %s): %r",
+                candidate,
+                phone,
+                create_result,
+            )
+            continue
+
+        if candidate != phone:
+            logger.info("Chat link: group-create ok com variante %s (digitado %s)", candidate, phone)
+            record.phone = candidate
+
+        record.whatsapp_group_id = group_id
+        record.group_name = group_name
+        await session.flush()
+
+        try:
+            await mcp_client.call_tool("group-metadata", {"groupId": group_id})
+        except Exception:
+            logger.exception("Chat link: falha group-metadata pos-create %s", group_id)
+
+        try:
+            add_result = await mcp_client.call_tool(
+                "group-add-participant",
+                {"groupId": group_id, "phones": [candidate], "autoInvite": True},
+            )
+            if not mcp_client.tool_call_succeeded(add_result):
+                logger.warning("Chat link: group-add-participant pos-create %s: %r", candidate, add_result)
+        except Exception:
+            logger.exception("Chat link: falha group-add-participant pos-create %s", candidate)
+
+        return group_id, None
+
+    return None, last_error
+
+
+def _group_create_user_message(mcp_message: str | None) -> str:
+    hint = (mcp_message or "").lower()
+    if "participants not found" in hint:
+        return (
+            "Nao foi possivel criar seu grupo: o WhatsApp nao encontrou esse numero como participante. "
+            "Confira DDI+DDD+numero (tente com e sem o 9 apos o DDD) ou use um numero diferente do "
+            "conectado a instancia Z-API."
         )
-    except Exception:
-        logger.exception("Chat link: falha group-create para %s", phone)
-        return None
-    group_id = mcp_client.extract_group_id(create_result)
-    if group_id is None:
-        logger.warning("Chat link: group-create sem groupId: %r", create_result)
-        return None
-
-    record.whatsapp_group_id = group_id
-    record.group_name = group_name
-    await session.flush()
-
-    try:
-        await mcp_client.call_tool("group-metadata", {"groupId": group_id})
-    except Exception:
-        logger.exception("Chat link: falha group-metadata pos-create %s", group_id)
-
-    try:
-        add_result = await mcp_client.call_tool(
-            "group-add-participant",
-            {"groupId": group_id, "phones": [phone], "autoInvite": True},
-        )
-        if not mcp_client.tool_call_succeeded(add_result):
-            logger.warning("Chat link: group-add-participant pos-create %s: %r", phone, add_result)
-    except Exception:
-        logger.exception("Chat link: falha group-add-participant pos-create %s", phone)
-
-    return group_id
+    return "Nao foi possivel criar seu grupo agora. Tente novamente pelo chat."
 
 
 def _welcome_dm_text(record: ChatConsentSession) -> str:
@@ -368,11 +397,11 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     record.status = ChatLinkStatus.CREATING_GROUP
     await session.commit()
 
-    group_id = await _create_personal_group(session, campaign, record.phone, record)
+    group_id, create_error = await _create_personal_group(session, campaign, record.phone, record)
     if group_id is None:
         record.status = ChatLinkStatus.PENDING
         await session.commit()
-        return False, "Nao foi possivel criar seu grupo agora. Tente novamente pelo chat."
+        return False, _group_create_user_message(create_error)
 
     record.status = ChatLinkStatus.ADDING_PARTICIPANT
     await session.commit()
