@@ -266,3 +266,27 @@ def extract_group_id(mcp_result: dict[str, Any]) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def group_has_participant(mcp_result: dict[str, Any], phone_digits: str) -> bool:
+    """Checa se `phone_digits` (so digitos, sem @lid/formatacao) esta na
+    lista `participants` do retorno de `group-metadata` (schema real
+    confirmado ao vivo 2026-08-16: `{"participants": [{"phone": "...",
+    "lid": "...@lid", ...}]}`). Compara so digitos dos dois lados - o MCP
+    retorna phone como MSISDN puro, sem `+`/mascara."""
+    payload = parse_tool_payload(mcp_result)
+    if payload is None:
+        return False
+    participants = payload.get("participants")
+    if not isinstance(participants, list):
+        return False
+    target = "".join(ch for ch in phone_digits if ch.isdigit())
+    if not target:
+        return False
+    for p in participants:
+        if not isinstance(p, dict):
+            continue
+        candidate = "".join(ch for ch in str(p.get("phone", "")) if ch.isdigit())
+        if candidate and candidate == target:
+            return True
+    return False

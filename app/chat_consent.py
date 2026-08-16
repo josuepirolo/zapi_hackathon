@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.phone_mask import mask_phone_digits
-from app.campaign_defaults import WELCOME_MESSAGE
+from app.campaign_defaults import ALREADY_MEMBER_MESSAGE, WELCOME_MESSAGE
 from app.config import CHAT_HUMAN_VERIFY_TTL_HOURS, CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
 from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
 from app.webhook import _lock_campaign, _send_group_welcome
@@ -120,6 +120,21 @@ async def ensure_phone_in_group(session: AsyncSession, campaign: Campaign, phone
     return True
 
 
+async def _phone_already_in_group(campaign: Campaign, phone: str) -> bool:
+    """Uso implicito do `group-metadata` (nao so pra marcar checklist,
+    ver CONTEXTO_HACKATHON_FINAL.md secao 21): antes de mandar outro
+    convite, confere se o telefone ja esta na lista real de participantes
+    do grupo - evita reconvidar quem ja faz parte."""
+    if not campaign.whatsapp_group_id:
+        return False
+    try:
+        result = await mcp_client.call_tool("group-metadata", {"groupId": campaign.whatsapp_group_id})
+    except Exception:
+        logger.exception("Falha ao consultar group-metadata para checar %s", phone)
+        return False
+    return mcp_client.group_has_participant(result, phone)
+
+
 async def start_tracked_consent(
     session: AsyncSession,
     browser_session_id: str,
@@ -127,6 +142,14 @@ async def start_tracked_consent(
 ) -> tuple[bool, str, list[str], str]:
     """Cria registro, envia link no WhatsApp. Retorna (ok, reply, tools, consent_status)."""
     campaign = await _latest_campaign(session)
+
+    if campaign and await _phone_already_in_group(campaign, phone):
+        try:
+            await mcp_client.call_tool("send-text", {"phone": phone, "message": ALREADY_MEMBER_MESSAGE})
+        except Exception:
+            logger.exception("Falha ao avisar %s que ja esta no grupo", phone)
+        return True, ALREADY_MEMBER_MESSAGE, ["group-metadata", "send-text"], "accepted"
+
     token = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
 
