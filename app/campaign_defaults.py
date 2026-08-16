@@ -29,4 +29,9 @@ ALREADY_MEMBER_MESSAGE = (
     "Fique de olho nas proximas novidades sobre IA e MCP."
 )
 
+ADMIN_ALREADY_MEMBER_MESSAGE = (
+    "Esse numero ja e administrador do nosso grupo de novidades Tech! "
+    "Voce ja tem acesso total por la."
+)
+
 DEMO_GROUP_MESSAGE = "Novidade no ar! Fique de olho nas proximas atualizacoes sobre IA e MCP no grupo."

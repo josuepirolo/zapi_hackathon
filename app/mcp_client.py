@@ -268,25 +268,51 @@ def extract_group_id(mcp_result: dict[str, Any]) -> str | None:
     return None
 
 
-def group_has_participant(mcp_result: dict[str, Any], phone_digits: str) -> bool:
-    """Checa se `phone_digits` (so digitos, sem @lid/formatacao) esta na
-    lista `participants` do retorno de `group-metadata` (schema real
-    confirmado ao vivo 2026-08-16: `{"participants": [{"phone": "...",
-    "lid": "...@lid", ...}]}`). Compara so digitos dos dois lados - o MCP
-    retorna phone como MSISDN puro, sem `+`/mascara."""
+def _br_phone_variants(digits: str) -> set[str]:
+    """Numero movel brasileiro pode aparecer com ou sem o 9o digito
+    (DDI+DDD+9+8digitos = 13 digitos, ou DDI+DDD+8digitos = 12) - mesmo
+    numero fisico, formatos diferentes. Achado real 2026-08-16: o
+    `owner` do `group-metadata` veio sem o 9 (554498094320), enquanto o
+    numero digitado/configurado costuma vir com (5544998094320) - sem
+    tolerar isso, a checagem de "ja e participante" erra pro dono/admin
+    do proprio grupo. Gera as duas variantes pra comparar certo."""
+    variants = {digits}
+    if digits.startswith("55") and len(digits) == 13 and digits[4] == "9":
+        variants.add(digits[:4] + digits[5:])  # remove o 9
+    elif digits.startswith("55") and len(digits) == 12:
+        variants.add(digits[:4] + "9" + digits[4:])  # adiciona o 9
+    return variants
+
+
+def _only_digits(value: str) -> str:
+    return "".join(ch for ch in value if ch.isdigit())
+
+
+def find_participant(mcp_result: dict[str, Any], phone_digits: str) -> dict[str, Any] | None:
+    """Retorna o registro do participante (com `isAdmin`/`isSuperAdmin`)
+    se `phone_digits` estiver na lista `participants` do retorno de
+    `group-metadata` (schema real confirmado ao vivo 2026-08-16:
+    `{"participants": [{"phone": "...", "lid": "...@lid", "isAdmin":
+    bool, "isSuperAdmin": bool}]}`). Tolera a variacao do 9o digito."""
     payload = parse_tool_payload(mcp_result)
     if payload is None:
-        return False
+        return None
     participants = payload.get("participants")
     if not isinstance(participants, list):
-        return False
-    target = "".join(ch for ch in phone_digits if ch.isdigit())
+        return None
+    target = _only_digits(phone_digits)
     if not target:
-        return False
+        return None
+    target_variants = _br_phone_variants(target)
     for p in participants:
         if not isinstance(p, dict):
             continue
-        candidate = "".join(ch for ch in str(p.get("phone", "")) if ch.isdigit())
-        if candidate and candidate == target:
-            return True
-    return False
+        candidate = _only_digits(str(p.get("phone", "")))
+        if candidate and _br_phone_variants(candidate) & target_variants:
+            return p
+    return None
+
+
+def group_has_participant(mcp_result: dict[str, Any], phone_digits: str) -> bool:
+    """Checa so a presenca (ver `find_participant` pra pegar isAdmin/etc)."""
+    return find_participant(mcp_result, phone_digits) is not None
