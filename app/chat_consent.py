@@ -29,6 +29,13 @@ _CONSENT_TTL = timedelta(minutes=CONSENT_LINK_TTL_MINUTES)
 _HUMAN_VERIFY_TTL = timedelta(hours=CHAT_HUMAN_VERIFY_TTL_HOURS)
 
 
+def _utc_aware(dt: datetime) -> datetime:
+    """SQLite via aiosqlite devolve datetime naive — normaliza pra UTC aware."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def normalize_browser_session_id(raw: str | None) -> str:
     if not raw:
         return str(uuid.uuid4())
@@ -43,7 +50,7 @@ def confirm_url(token: str) -> str:
 
 
 def _is_expired(record: ChatConsentSession, now: datetime) -> bool:
-    return record.created_at + _CONSENT_TTL < now
+    return _utc_aware(record.created_at) + _CONSENT_TTL < now
 
 
 async def _expire_if_needed(session: AsyncSession, record: ChatConsentSession, now: datetime) -> ChatConsentSession:
@@ -248,7 +255,7 @@ async def is_human_verified(session: AsyncSession, browser_session_id: str) -> b
     row = await session.get(ChatHumanVerification, browser_session_id)
     if row is None:
         return False
-    if row.expires_at < now:
+    if _utc_aware(row.expires_at) < now:
         await session.delete(row)
         await session.commit()
         return False
