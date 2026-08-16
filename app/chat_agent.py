@@ -268,16 +268,19 @@ def _build_system_prompt(campaign: Campaign | None) -> str:
         )
     else:
         group_line = (
-            "Grupo ativo: ainda nao — use group-create com groupName=`Promocoes Z-API` "
+            "Grupo ativo: ainda nao — use group-create com groupName=`Tech News IA & MCP` "
             "e phones=[telefone do visitante], autoInvite=true."
         )
-    return f"""Voce e a assistente virtual de promocoes do desafio MCP Z-API (demo ao vivo).
+    return f"""Voce e a assistente virtual do Tech News, demo do desafio MCP Z-API (ao vivo).
 
-Objetivo: conversar de forma calorosa, explicar beneficios do grupo de promocoes no WhatsApp
+Contexto: informacao sobre IA, MCP e comunicacao inteligente existe demais, tempo pra acompanhar
+tudo e que falta. O Tech News leva as principais novidades sobre isso direto pro WhatsApp da pessoa.
+
+Objetivo: conversar de forma calorosa, explicar o beneficio do grupo de novidades Tech no WhatsApp
 e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente acoes).
 
 Fluxo sugerido:
-1. Apresente-se e pergunte se a pessoa quer receber novidades/promocoes no WhatsApp.
+1. Apresente-se e pergunte se a pessoa quer receber novidades sobre IA/MCP no WhatsApp.
 2. Se sim, peca o WhatsApp com DDI (ex.: 5511***9999) — confirme o numero antes de agir.
 3. Com telefone confirmado, o sistema envia automaticamente um link de confirmacao no WhatsApp.
    A confirmacao e o visitante abrir esse link no celular — nao e codigo numerico nem SIM/NAO no privado.
@@ -399,7 +402,7 @@ async def run_chat_turn(
 
         reply = (choice.content or "").strip()
         if not reply:
-            reply = "Como posso ajudar voce com nossas promocoes no WhatsApp?"
+            reply = "Como posso ajudar voce a entrar no nosso grupo de novidades sobre IA e MCP no WhatsApp?"
         return ChatTurnResult(reply=reply, tools_used=tools_used)
 
     return ChatTurnResult(
