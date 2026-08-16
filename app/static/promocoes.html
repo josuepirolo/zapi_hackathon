@@ -221,7 +221,7 @@
     <button type="button" class="close-btn" id="close-chat" aria-label="Fechar">&times;</button>
   </div>
   <div class="chat-messages" id="messages"></div>
-  <div class="turnstile-section hidden" id="turnstile-section">
+  <div class="turnstile-section" id="turnstile-section">
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
@@ -328,7 +328,6 @@ function unlockChatAfterHuman() {
   humanVerified = true;
   setSecurityCheck(false);
   setSendEnabled(true);
-  document.getElementById("turnstile-section").classList.add("hidden");
   addAssistant(
     "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
     "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
@@ -346,8 +345,8 @@ function onTurnstileExpired() {
 }
 
 function startTurnstileWidget() {
-  if (!turnstileEnabled || humanVerified || !turnstileSiteKey) return;
-  document.getElementById("turnstile-section").classList.remove("hidden");
+  if (!turnstileEnabled || !turnstileSiteKey) return;
+  document.getElementById("turnstile-section").style.display = "";
   const run = () => {
     if (turnstileWidgetId !== null) return;
     turnstileWidgetId = turnstile.render("#turnstile-box", {
@@ -363,8 +362,8 @@ function startTurnstileWidget() {
 }
 
 function retryTurnstile() {
-  if (!turnstileEnabled || humanVerified) return;
-  document.getElementById("turnstile-section").classList.remove("hidden");
+  if (!turnstileEnabled) return;
+  document.getElementById("turnstile-section").style.display = "";
   if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
     turnstile.reset(turnstileWidgetId);
   } else {
@@ -373,6 +372,7 @@ function retryTurnstile() {
 }
 
 function beginSecurityVerification() {
+  humanVerified = false;
   setSendEnabled(false);
   setSecurityCheck(true);
   startTurnstileWidget();
@@ -381,10 +381,15 @@ function beginSecurityVerification() {
 async function checkExistingHumanVerification() {
   if (!turnstileEnabled) {
     humanVerified = true;
+    document.getElementById("turnstile-section").style.display = "none";
     setSendEnabled(true);
     setSecurityCheck(false);
     return;
   }
+
+  // Sempre mostra o widget Cloudflare (mesmo se ja verificado no servidor).
+  startTurnstileWidget();
+
   try {
     const resp = await fetch(`/api/chat/human/${encodeURIComponent(browserSessionId)}`);
     const data = await resp.json();
@@ -396,12 +401,13 @@ async function checkExistingHumanVerification() {
       humanVerified = true;
       setSendEnabled(true);
       setSecurityCheck(false);
-      document.getElementById("turnstile-section").classList.add("hidden");
     } else {
-      beginSecurityVerification();
+      setSendEnabled(false);
+      setSecurityCheck(true);
     }
   } catch (err) {
-    beginSecurityVerification();
+    setSendEnabled(false);
+    setSecurityCheck(true);
   }
 }
 
@@ -468,8 +474,8 @@ function openChat() {
         );
       } else if (turnstileEnabled) {
         addAssistant(
-          "Olá! Pode ir escrevendo — a verificação de segurança roda sozinha ali embaixo. " +
-          "Libero o enviar assim que terminar.",
+          "Olá! Pode ir escrevendo — a verificação Cloudflare roda ali embaixo. " +
+          "Libero o enviar assim que o botãozinho terminar.",
           []
         );
       } else {
