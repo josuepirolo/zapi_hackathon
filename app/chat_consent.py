@@ -167,7 +167,7 @@ async def start_tracked_consent(
     await session.commit()
 
     link = confirm_url(token)
-    campaign_name = campaign.name if campaign else "Promocoes Z-API"
+    campaign_name = campaign.name if campaign else "Tech News IA & MCP"
     message = (
         f"Ola! Voce pediu para entrar no grupo *{campaign_name}* pelo site.\n\n"
         f"Toque no link para confirmar sua entrada:\n{link}\n\n"
@@ -272,7 +272,7 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
         logger.exception("Chat link: falha send-text pos-aceite para %s", record.phone)
 
     logger.info("Chat link aceito token=%s phone=%s session=%s", token, record.phone, record.browser_session_id)
-    return True, "Pronto! Voce entrou no grupo de promocoes. Pode voltar ao chat no site."
+    return True, "Pronto! Voce entrou no grupo Tech News. Pode voltar ao chat no site."
 
 
 async def is_human_verified(session: AsyncSession, browser_session_id: str) -> bool:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Promoções Z-API — IA + MCP</title>
+<title>Tech News IA & MCP — Z-API</title>
 <style>
   :root {
     --bg: #0b1f14;
@@ -185,15 +185,15 @@
 
 <section class="hero">
   <span class="badge">Desafio MCP Z-API 2026</span>
-  <h1>Promoções exclusivas no seu WhatsApp</h1>
+  <h1>Tech News: IA, MCP e o futuro da comunicação — no seu WhatsApp</h1>
   <p class="lead">
-    Converse com nossa assistente de IA — ela usa o <strong>Server MCP oficial da Z-API</strong>
-    para enviar mensagens e gerenciar grupos em tempo real.
+    Informação existe demais, tempo pra acompanhar tudo é que falta. Converse com nossa assistente de IA — ela usa o
+    <strong>Server MCP oficial da Z-API</strong> pra criar seu grupo e entregar as novidades em tempo real.
   </p>
   <div class="features">
     <div class="feature">
       <h3>IA conversacional</h3>
-      <p>Explique suas dúvidas sobre o grupo de promoções antes de participar.</p>
+      <p>Explique suas dúvidas sobre o grupo de novidades Tech antes de participar.</p>
     </div>
     <div class="feature">
       <h3>9 tools MCP</h3>
@@ -208,14 +208,14 @@
 
 <button type="button" class="fab" id="open-chat" aria-label="Abrir chat">
   <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
-  Falar com a assistente
+  Quero 🚀
 </button>
 
 <div class="overlay" id="overlay"></div>
-<aside class="chat-panel" id="chat-panel" aria-label="Chat de promoções">
+<aside class="chat-panel" id="chat-panel" aria-label="Chat de novidades Tech">
   <div class="chat-header">
     <div>
-      <h2>Assistente de Promoções</h2>
+      <h2>Assistente Tech News</h2>
       <p>Powered by OpenAI + MCP Z-API</p>
     </div>
     <button type="button" class="close-btn" id="close-chat" aria-label="Fechar">&times;</button>
@@ -393,7 +393,7 @@ function unlockChatAfterHuman() {
   if (!welcomedAfterVerify) {
     welcomedAfterVerify = true;
     addAssistant(
-      "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+      "Agora sim! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
       "(ex.: 5544***9999). Envio um link de confirmação no celular e confirmo aqui quando você tocar nele. Quer participar?",
       []
     );
@@ -508,7 +508,7 @@ async function pollConsent() {
     if (data.status === "accepted") {
       stopConsentPoll();
       setWaiting(false);
-      const msg = "Perfeito! Confirmamos seu clique no link. Bem-vindo(a) ao grupo de promoções!";
+      const msg = "Perfeito! Confirmamos seu clique no link. Bem-vindo(a) ao Tech News!";
       addAssistant(msg, data.tools_used || ["send-text", "group-add-participant"]);
       history.push({ role: "assistant", content: msg });
     } else if (data.status === "expired") {
@@ -530,7 +530,7 @@ function openChat() {
       opened = true;
       if (humanVerified) {
         addAssistant(
-          "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+          "Olá! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
           "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
           []
         );
@@ -542,7 +542,7 @@ function openChat() {
         );
       } else {
         addAssistant(
-          "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+          "Olá! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
           "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
           []
         );
