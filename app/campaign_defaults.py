@@ -13,6 +13,12 @@ TRIGGER_KEYWORD = "#desafiozapi"
 
 GROUP_NAME_PREFIX = "Tech News IA & MCP"
 
+INSTANCE_PHONE_BLOCKED_MESSAGE = (
+    "Esse e o numero conectado a instancia Z-API desta demonstracao — voce e o admin. "
+    "O grupo pessoal nao pode ser criado com o mesmo WhatsApp da instancia. "
+    "Para a apresentacao, informe outro celular com DDI (ex.: de quem vai participar da demo)."
+)
+
 LANDING_DESCRIPTION = (
     "Novidades sobre IA, MCP e o futuro da comunicação inteligente, direto no seu WhatsApp — entre com um clique."
 )
