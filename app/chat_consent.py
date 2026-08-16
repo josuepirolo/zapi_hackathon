@@ -22,10 +22,16 @@ from app.campaign_defaults import (
     ADMIN_ALREADY_MEMBER_MESSAGE,
     ALREADY_MEMBER_MESSAGE,
     GROUP_NAME_PREFIX,
+    INSTANCE_PHONE_BLOCKED_MESSAGE,
     JOINED_MESSAGE,
     WELCOME_MESSAGE,
 )
-from app.config import CHAT_HUMAN_VERIFY_TTL_HOURS, CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
+from app.config import (
+    CHAT_HUMAN_VERIFY_TTL_HOURS,
+    CONSENT_LINK_TTL_MINUTES,
+    PUBLIC_BASE_URL,
+    ZAPI_INSTANCE_PHONE,
+)
 from app.group_news import send_group_news
 from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
 from app.webhook import _lock_campaign
@@ -192,12 +198,14 @@ async def _create_personal_group(
 def _group_create_user_message(mcp_message: str | None) -> str:
     hint = (mcp_message or "").lower()
     if "participants not found" in hint:
-        return (
-            "Nao foi possivel criar seu grupo: o WhatsApp nao encontrou esse numero como participante. "
-            "Confira DDI+DDD+numero (tente com e sem o 9 apos o DDD) ou use um numero diferente do "
-            "conectado a instancia Z-API."
-        )
+        return INSTANCE_PHONE_BLOCKED_MESSAGE
     return "Nao foi possivel criar seu grupo agora. Tente novamente pelo chat."
+
+
+def _is_instance_phone(phone: str) -> bool:
+    if not ZAPI_INSTANCE_PHONE:
+        return False
+    return mcp_client.phones_equivalent(phone, ZAPI_INSTANCE_PHONE)
 
 
 def _welcome_dm_text(record: ChatConsentSession) -> str:
@@ -239,6 +247,10 @@ async def start_tracked_consent(
     phone: str,
     name: str | None = None,
 ) -> tuple[bool, str, list[str], str]:
+    if _is_instance_phone(phone):
+        logger.info("Chat link recusado: numero da instancia Z-API (admin) phone=%s session=%s", phone, browser_session_id)
+        return False, INSTANCE_PHONE_BLOCKED_MESSAGE, [], "none"
+
     campaign = await _latest_campaign(session)
 
     existing_kind, _existing_group = await _detect_existing_participant(session, phone)
@@ -361,6 +373,10 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
         return False, "Este link expirou. Volte ao chat e solicite um novo convite."
     if record.status == ChatLinkStatus.ACCEPTED:
         return True, "Entrada ja confirmada! Pode voltar ao chat no site."
+
+    if _is_instance_phone(record.phone):
+        logger.info("Chat link accept recusado: numero da instancia Z-API token=%s phone=%s", token, record.phone)
+        return False, INSTANCE_PHONE_BLOCKED_MESSAGE
 
     campaign: Campaign | None = None
     if record.campaign_id:

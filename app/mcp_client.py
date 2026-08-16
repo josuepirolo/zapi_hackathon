@@ -304,6 +304,15 @@ def mcp_error_message(mcp_result: dict[str, Any]) -> str | None:
     return str(message) if message else None
 
 
+def phones_equivalent(a: str, b: str) -> bool:
+    """True se dois MSISDNs sao o mesmo numero (tolera 9o digito BR)."""
+    da = _only_digits(a)
+    db = _only_digits(b)
+    if not da or not db:
+        return False
+    return bool(_br_phone_variants(da) & _br_phone_variants(db))
+
+
 def _only_digits(value: str) -> str:
     return "".join(ch for ch in value if ch.isdigit())
 
