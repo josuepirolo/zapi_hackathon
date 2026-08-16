@@ -387,7 +387,10 @@ async function checkExistingHumanVerification() {
     return;
   }
 
-  // Sempre mostra o widget Cloudflare (mesmo se ja verificado no servidor).
+  // Enviar so libera no callback do Turnstile nesta aba — nunca pelo cache do servidor sozinho.
+  humanVerified = false;
+  setSendEnabled(false);
+  setSecurityCheck(true);
   startTurnstileWidget();
 
   try {
@@ -397,17 +400,8 @@ async function checkExistingHumanVerification() {
       browserSessionId = data.session_id;
       localStorage.setItem("delega_chat_session", browserSessionId);
     }
-    if (data.verified) {
-      humanVerified = true;
-      setSendEnabled(true);
-      setSecurityCheck(false);
-    } else {
-      setSendEnabled(false);
-      setSecurityCheck(true);
-    }
   } catch (err) {
-    setSendEnabled(false);
-    setSecurityCheck(true);
+    /* mantém bloqueado ate o Turnstile concluir */
   }
 }
 
