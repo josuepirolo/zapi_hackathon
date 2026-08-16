@@ -177,6 +177,18 @@
     background: var(--chat-bg);
     border-top: 1px solid #e8ece9;
   }
+  .turnstile-section.verified {
+    border-top-color: #1e7a4d;
+    background: #eef8f2;
+  }
+  .turnstile-verified-label {
+    display: none;
+    margin: 0 0 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #1e7a4d;
+  }
+  .turnstile-section.verified .turnstile-verified-label { display: block; }
   .turnstile-section.hidden { display: none; }
 </style>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -222,6 +234,7 @@
   </div>
   <div class="chat-messages" id="messages"></div>
   <div class="turnstile-section" id="turnstile-section">
+    <p class="turnstile-verified-label" id="turnstile-verified-label">Verificação Cloudflare concluída</p>
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
@@ -245,6 +258,8 @@ let turnstileSiteKey = null;
 let turnstileWidgetId = null;
 let chatConfigLoaded = false;
 let humanVerified = false;
+let verifyHumanInFlight = false;
+let welcomedAfterVerify = false;
 let browserSessionId = localStorage.getItem("delega_chat_session");
 if (!browserSessionId) {
   browserSessionId = crypto.randomUUID();
@@ -293,55 +308,103 @@ function setSecurityCheck(on) {
   }
 }
 
+function markTurnstileVerifiedUI() {
+  document.getElementById("turnstile-section").classList.add("verified");
+}
+
+async function confirmHumanOnServer(token) {
+  const resp = await fetch("/api/chat/verify-human", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: browserSessionId, turnstile_token: token }),
+  });
+  let data = {};
+  try {
+    data = await resp.json();
+  } catch (e) {
+    data = {};
+  }
+  return { resp, data };
+}
+
+async function refreshHumanStatusFromServer() {
+  try {
+    const data = await (await fetch(`/api/chat/human/${encodeURIComponent(browserSessionId)}`)).json();
+    if (data.session_id) {
+      browserSessionId = data.session_id;
+      localStorage.setItem("delega_chat_session", browserSessionId);
+    }
+    return !!data.verified;
+  } catch (e) {
+    return false;
+  }
+}
+
 function onTurnstileVerified() {
-  if (humanVerified) return;
+  if (humanVerified || verifyHumanInFlight) return;
   if (typeof turnstile === "undefined" || turnstileWidgetId === null) return;
 
   const token = turnstile.getResponse(turnstileWidgetId);
   if (!token) return;
 
-  fetch("/api/chat/verify-human", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: browserSessionId, turnstile_token: token }),
-  })
-    .then((resp) => resp.json().then((data) => ({ resp, data })))
-    .then(({ resp, data }) => {
-      if (!resp.ok) {
-        setSecurityCheck(true);
-        retryTurnstile();
+  verifyHumanInFlight = true;
+  confirmHumanOnServer(token)
+    .then(async ({ resp, data }) => {
+      if (resp.ok) {
+        if (data.session_id) {
+          browserSessionId = data.session_id;
+          localStorage.setItem("delega_chat_session", browserSessionId);
+        }
+        unlockChatAfterHuman();
         return;
       }
-      if (data.session_id) {
-        browserSessionId = data.session_id;
-        localStorage.setItem("delega_chat_session", browserSessionId);
+      // Token Turnstile e single-use — callback duplo ou retry: se servidor ja ok, libera.
+      if (await refreshHumanStatusFromServer()) {
+        unlockChatAfterHuman();
+        return;
       }
-      unlockChatAfterHuman();
-    })
-    .catch(() => {
+      addAssistant("Não consegui confirmar a verificação no servidor. Aguarde o Cloudflare tentar de novo.", []);
       setSecurityCheck(true);
       retryTurnstile();
+    })
+    .catch(async () => {
+      if (await refreshHumanStatusFromServer()) {
+        unlockChatAfterHuman();
+        return;
+      }
+      addAssistant("Falha ao confirmar verificação. Tente recarregar a página.", []);
+      setSecurityCheck(true);
+      retryTurnstile();
+    })
+    .finally(() => {
+      verifyHumanInFlight = false;
     });
 }
 
 function unlockChatAfterHuman() {
+  if (humanVerified) return;
   humanVerified = true;
   setSecurityCheck(false);
   setSendEnabled(true);
-  addAssistant(
-    "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-    "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
-    []
-  );
+  markTurnstileVerifiedUI();
+  if (!welcomedAfterVerify) {
+    welcomedAfterVerify = true;
+    addAssistant(
+      "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+      "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
+      []
+    );
+  }
   inputEl.focus();
 }
 
 function onTurnstileExpired() {
-  if (!humanVerified) {
-    setSendEnabled(false);
-    setSecurityCheck(true);
-    retryTurnstile();
-  }
+  if (humanVerified) return;
+  humanVerified = false;
+  setSendEnabled(false);
+  setSecurityCheck(true);
+  document.getElementById("turnstile-section").classList.remove("verified");
+  retryTurnstile();
 }
 
 function startTurnstileWidget() {
@@ -362,7 +425,7 @@ function startTurnstileWidget() {
 }
 
 function retryTurnstile() {
-  if (!turnstileEnabled) return;
+  if (!turnstileEnabled || humanVerified) return;
   document.getElementById("turnstile-section").style.display = "";
   if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
     turnstile.reset(turnstileWidgetId);
@@ -387,7 +450,10 @@ async function checkExistingHumanVerification() {
     return;
   }
 
-  // Sempre mostra o widget Cloudflare (mesmo se ja verificado no servidor).
+  // Enviar so libera no callback do Turnstile nesta aba — nunca pelo cache do servidor sozinho.
+  humanVerified = false;
+  setSendEnabled(false);
+  setSecurityCheck(true);
   startTurnstileWidget();
 
   try {
@@ -397,17 +463,8 @@ async function checkExistingHumanVerification() {
       browserSessionId = data.session_id;
       localStorage.setItem("delega_chat_session", browserSessionId);
     }
-    if (data.verified) {
-      humanVerified = true;
-      setSendEnabled(true);
-      setSecurityCheck(false);
-    } else {
-      setSendEnabled(false);
-      setSecurityCheck(true);
-    }
   } catch (err) {
-    setSendEnabled(false);
-    setSecurityCheck(true);
+    /* mantém bloqueado ate o Turnstile concluir */
   }
 }
 
@@ -541,13 +598,13 @@ async function send() {
 
   await loadChatConfig();
   if (turnstileEnabled && !humanVerified) {
-    addAssistant("Aguardando verificação de segurança — um instante e você poderá enviar.", []);
+    addAssistant("Aguarde o Cloudflare terminar a verificação ali embaixo — o Enviar libera em seguida.", []);
     return;
   }
 
   inputEl.value = "";
   addUser(text);
-  sendEl.disabled = true;
+  setSendEnabled(false);
   inputEl.disabled = true;
   setTyping(true);
   try {
@@ -585,11 +642,12 @@ async function send() {
       startConsentPoll();
     }
   } catch (err) {
-    addAssistant("Não foi possível conectar. Tente novamente.", []);
+    addAssistant("Não foi possível conectar. Verifique sua rede e tente de novo.", []);
   } finally {
     setTyping(false);
     inputEl.disabled = false;
-    setSendEnabled(humanVerified);
+    if (humanVerified) setSendEnabled(true);
+    else setSendEnabled(false);
     inputEl.focus();
   }
 }
