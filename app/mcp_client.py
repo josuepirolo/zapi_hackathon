@@ -284,6 +284,26 @@ def _br_phone_variants(digits: str) -> set[str]:
     return variants
 
 
+def mcp_phone_candidates(phone_digits: str) -> list[str]:
+    """Ordem de tentativa para group-create/group-add — alterna 9o digito BR."""
+    base = _only_digits(phone_digits)
+    if not base:
+        return []
+    ordered: list[str] = [base]
+    for variant in _br_phone_variants(base):
+        if variant not in ordered:
+            ordered.append(variant)
+    return ordered
+
+
+def mcp_error_message(mcp_result: dict[str, Any]) -> str | None:
+    payload = parse_tool_payload(mcp_result)
+    if payload is None:
+        return None
+    message = payload.get("message")
+    return str(message) if message else None
+
+
 def _only_digits(value: str) -> str:
     return "".join(ch for ch in value if ch.isdigit())
 

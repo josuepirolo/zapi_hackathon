@@ -486,6 +486,8 @@ const WAITING_LABELS = {
   preparing_content: "Preparando a primeira notícia pra você…",
 };
 
+const CONSENT_WAITING_STATUSES = new Set(Object.keys(WAITING_LABELS));
+
 function setWaiting(text) {
   let el = document.getElementById("waiting");
   if (text) {
@@ -502,11 +504,31 @@ function setWaiting(text) {
   }
 }
 
-function startConsentPoll() {
+function startConsentPoll(initialStatus) {
   stopConsentPoll();
-  setWaiting(WAITING_LABELS.pending);
+  const status = CONSENT_WAITING_STATUSES.has(initialStatus) ? initialStatus : "pending";
+  setWaiting(WAITING_LABELS[status]);
+  inputEl.disabled = true;
+  setSendEnabled(false);
   pollConsent();
   pollTimer = setInterval(pollConsent, 2000);
+}
+
+function handleConsentAccepted(data) {
+  stopConsentPoll();
+  setWaiting(null);
+  const msg =
+    data.message ||
+    "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
+  const tools = data.tools_used || [];
+  addAssistant(msg, tools);
+  history.push({ role: "assistant", content: msg });
+  if (!consentAcceptedHintShown) {
+    consentAcceptedHintShown = true;
+    addAssistant(POST_JOIN_HINT, []);
+    history.push({ role: "assistant", content: POST_JOIN_HINT });
+  }
+  reenableAfterConsent();
 }
 
 function reenableAfterConsent() {
@@ -521,27 +543,32 @@ async function pollConsent() {
     const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
     const data = await resp.json();
     if (data.status === "accepted") {
-      stopConsentPoll();
-      setWaiting(null);
-      const msg = data.message || "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
-      addAssistant(msg, []);
-      history.push({ role: "assistant", content: msg });
-      if (!consentAcceptedHintShown) {
-        consentAcceptedHintShown = true;
-        addAssistant(POST_JOIN_HINT, []);
-        history.push({ role: "assistant", content: POST_JOIN_HINT });
-      }
-      reenableAfterConsent();
+      handleConsentAccepted(data);
     } else if (data.status === "expired") {
       stopConsentPoll();
       setWaiting(null);
       addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
       reenableAfterConsent();
-    } else if (WAITING_LABELS[data.status]) {
+    } else if (CONSENT_WAITING_STATUSES.has(data.status)) {
       setWaiting(WAITING_LABELS[data.status]);
     }
   } catch (err) {
     /* mantém polling */
+  }
+}
+
+async function resumeConsentIfNeeded() {
+  if (pollTimer) return;
+  try {
+    const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
+    const data = await resp.json();
+    if (CONSENT_WAITING_STATUSES.has(data.status)) {
+      startConsentPoll(data.status);
+    } else if (data.status === "accepted" && !consentAcceptedHintShown) {
+      handleConsentAccepted(data);
+    }
+  } catch (err) {
+    /* silencioso — usuario ainda nao iniciou fluxo */
   }
 }
 
@@ -581,13 +608,15 @@ function openChat() {
         showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       }
     }
-    if (humanVerified) inputEl.focus();
+    await resumeConsentIfNeeded();
+    if (humanVerified && !pollTimer) inputEl.focus();
   });
 }
 
 function closeChat() {
   panel.classList.remove("open");
   overlay.classList.remove("open");
+  stopConsentPoll();
 }
 
 document.getElementById("open-chat").addEventListener("click", openChat);
@@ -677,7 +706,7 @@ async function send() {
     history.push({ role: "assistant", content: data.reply });
     if (history.length > 30) history = history.slice(-30);
     if (data.consent_status === "waiting") {
-      startConsentPoll();
+      startConsentPoll("pending");
     }
   } catch (err) {
     addAssistant("Não foi possível conectar. Verifique sua rede e tente de novo.", []);

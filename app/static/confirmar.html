@@ -56,15 +56,20 @@ let turnstileEnabled = false;
 let turnstileSiteKey = null;
 let turnstileWidgetId = null;
 let turnstileTokenReady = false;
+let turnstileWidgetReady = false;
 
 function startTurnstileWidget() {
   if (!turnstileEnabled || !turnstileSiteKey) {
     turnstileSection.classList.add("hidden");
     btn.disabled = false;
+    turnstileWidgetReady = true;
     return;
   }
   turnstileSection.classList.remove("hidden");
   btn.disabled = true;
+  turnstileTokenReady = false;
+  turnstileWidgetReady = false;
+  resultEl.innerHTML = `<span class="muted" style="color:var(--muted);font-size:0.9rem;">Carregando verificacao Cloudflare…</span>`;
   const run = () => {
     if (turnstileWidgetId !== null) return;
     turnstileWidgetId = turnstile.render("#turnstile-box", {
@@ -79,11 +84,20 @@ function startTurnstileWidget() {
       "expired-callback": () => {
         turnstileTokenReady = false;
         btn.disabled = true;
+        resultEl.innerHTML = `<span class="err">Verificacao expirou. Marque o Cloudflare de novo.</span>`;
         if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
           turnstile.reset(turnstileWidgetId);
         }
       },
+      "error-callback": () => {
+        turnstileTokenReady = false;
+        turnstileWidgetReady = false;
+        btn.disabled = true;
+        resultEl.innerHTML = `<span class="err">Falha ao carregar Cloudflare. Recarregue a pagina ou tente em outro navegador.</span>`;
+      },
     });
+    turnstileWidgetReady = true;
+    resultEl.textContent = "";
   };
   if (typeof turnstile !== "undefined") run();
   else turnstile.ready(run);
@@ -107,10 +121,10 @@ async function accept() {
 
   let turnstileToken = null;
   if (turnstileEnabled) {
-    if (turnstileWidgetId === null || typeof turnstile === "undefined") {
+    if (!turnstileWidgetReady || turnstileWidgetId === null || typeof turnstile === "undefined") {
       startTurnstileWidget();
-      resultEl.innerHTML = `<span class="err">Aguarde o widget Cloudflare carregar abaixo e tente de novo.</span>`;
-      btn.disabled = false;
+      resultEl.innerHTML = `<span class="err">Aguarde o widget Cloudflare carregar abaixo e marque a verificacao.</span>`;
+      btn.disabled = true;
       return;
     }
     turnstileToken = turnstile.getResponse(turnstileWidgetId);
@@ -137,11 +151,12 @@ async function accept() {
       turnstileSection.classList.add("hidden");
     } else {
       resultEl.innerHTML = `<span class="err">${data.message || data.detail || "Nao foi possivel confirmar."}</span>`;
-      btn.disabled = false;
       if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
         turnstile.reset(turnstileWidgetId);
         turnstileTokenReady = false;
         btn.disabled = true;
+      } else {
+        btn.disabled = false;
       }
     }
   } catch (e) {

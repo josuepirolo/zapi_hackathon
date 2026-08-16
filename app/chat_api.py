@@ -103,8 +103,17 @@ class ChatResponse(BaseModel):
 
 
 class ConsentPollResponse(BaseModel):
-    status: Literal["none", "pending", "accepted", "expired"]
+    status: Literal[
+        "none",
+        "pending",
+        "creating_group",
+        "adding_participant",
+        "preparing_content",
+        "accepted",
+        "expired",
+    ]
     tools_used: list[str] = Field(default_factory=list)
+    message: str | None = None
 
 
 class ConsentAcceptRequest(BaseModel):
@@ -184,12 +193,23 @@ async def poll_chat_consent(
     browser_session_id = normalize_browser_session_id(session_id)
     data = await get_consent_poll_status(session, browser_session_id)
     status = data.get("status", "none")
-    if status not in ("none", "pending", "accepted", "expired"):
+    allowed = (
+        "none",
+        "pending",
+        "creating_group",
+        "adding_participant",
+        "preparing_content",
+        "accepted",
+        "expired",
+    )
+    if status not in allowed:
         status = "none"
     tools = data.get("tools_used")
+    message = data.get("message") if isinstance(data.get("message"), str) else None
     return ConsentPollResponse(
         status=status,  # type: ignore[arg-type]
         tools_used=list(tools) if isinstance(tools, list) else [],
+        message=message,
     )
 
 
