@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
+from app.phone_mask import mask_phone_digits
 from app.campaign_defaults import WELCOME_MESSAGE
 from app.config import CHAT_HUMAN_VERIFY_TTL_HOURS, CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
 from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
@@ -159,7 +160,7 @@ async def start_tracked_consent(
         await session.commit()
         return (
             False,
-            "Nao consegui enviar o link no WhatsApp. Verifique o numero com DDI (ex.: 5544999999999).",
+            "Nao consegui enviar o link no WhatsApp. Verifique o numero com DDI (ex.: 5544***9999).",
             [],
             "none",
         )
@@ -175,8 +176,9 @@ async def start_tracked_consent(
             "none",
         )
 
+    masked = mask_phone_digits(phone)
     reply = (
-        f"Enviei um link de confirmacao no WhatsApp para {phone}. "
+        f"Enviei um link de confirmacao no WhatsApp para {masked}. "
         "Abra a mensagem no celular, toque no link e confirme — "
         "vou aguardar aqui ate voce aceitar."
     )
