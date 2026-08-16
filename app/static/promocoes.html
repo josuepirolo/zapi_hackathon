@@ -554,7 +554,15 @@ async function send() {
         session_id: browserSessionId,
       }),
     });
-    const data = await resp.json();
+    let data = {};
+    try {
+      data = await resp.json();
+    } catch (parseErr) {
+      if (!resp.ok) {
+        addAssistant("Erro no servidor (" + resp.status + "). Tente novamente.", []);
+        return;
+      }
+    }
     if (!resp.ok) {
       addAssistant("Erro: " + apiErrorMessage(data, resp.statusText), []);
       return;
