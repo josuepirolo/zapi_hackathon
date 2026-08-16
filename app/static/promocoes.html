@@ -166,7 +166,9 @@
     font-size: 0.65rem; color: var(--muted); text-align: center;
     padding: 6px 12px 10px; background: #fff;
   }
+  #turnstile-box { padding: 10px 16px; background: #fff; border-top: 1px solid #e8ece9; min-height: 68px; }
 </style>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
 
@@ -208,6 +210,7 @@
     <button type="button" class="close-btn" id="close-chat" aria-label="Fechar">&times;</button>
   </div>
   <div class="chat-messages" id="messages"></div>
+  <div id="turnstile-box"></div>
   <div class="chat-input-row">
     <input id="input" type="text" placeholder="Digite sua mensagem…" autocomplete="off" />
     <button type="button" id="send">Enviar</button>
@@ -224,10 +227,50 @@ const overlay = document.getElementById("overlay");
 let history = [];
 let opened = false;
 let pollTimer = null;
+let turnstileEnabled = false;
+let turnstileSiteKey = null;
+let turnstileWidgetId = null;
+let chatConfigLoaded = false;
 let browserSessionId = localStorage.getItem("delega_chat_session");
 if (!browserSessionId) {
   browserSessionId = crypto.randomUUID();
   localStorage.setItem("delega_chat_session", browserSessionId);
+}
+
+function apiErrorMessage(data, statusText) {
+  if (!data || !data.detail) return statusText;
+  if (typeof data.detail === "string") return data.detail;
+  if (Array.isArray(data.detail)) return data.detail.map((x) => x.msg || String(x)).join(", ");
+  return statusText;
+}
+
+async function loadChatConfig() {
+  if (chatConfigLoaded) return;
+  try {
+    const resp = await fetch("/api/chat/config");
+    const cfg = await resp.json();
+    turnstileEnabled = !!cfg.turnstile_enabled;
+    turnstileSiteKey = cfg.turnstile_site_key || null;
+    chatConfigLoaded = true;
+  } catch (err) {
+    turnstileEnabled = false;
+    chatConfigLoaded = true;
+  }
+}
+
+function ensureTurnstileWidget() {
+  if (!turnstileEnabled || !turnstileSiteKey || turnstileWidgetId !== null) return;
+  if (typeof turnstile === "undefined") return;
+  turnstileWidgetId = turnstile.render("#turnstile-box", {
+    sitekey: turnstileSiteKey,
+    theme: "light",
+  });
+}
+
+function resetTurnstileWidget() {
+  if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
+    turnstile.reset(turnstileWidgetId);
+  }
 }
 
 function stopConsentPoll() {
@@ -281,6 +324,9 @@ async function pollConsent() {
 function openChat() {
   panel.classList.add("open");
   overlay.classList.add("open");
+  loadChatConfig().then(() => {
+    ensureTurnstileWidget();
+  });
   if (!opened) {
     opened = true;
     addAssistant(
@@ -340,6 +386,23 @@ function setTyping(on) {
 async function send() {
   const text = inputEl.value.trim();
   if (!text) return;
+
+  await loadChatConfig();
+  ensureTurnstileWidget();
+
+  let turnstileToken = null;
+  if (turnstileEnabled) {
+    if (typeof turnstile === "undefined" || turnstileWidgetId === null) {
+      addAssistant("Aguarde a verificacao anti-bot carregar e marque o checkbox.", []);
+      return;
+    }
+    turnstileToken = turnstile.getResponse(turnstileWidgetId);
+    if (!turnstileToken) {
+      addAssistant("Complete a verificacao anti-bot abaixo antes de enviar.", []);
+      return;
+    }
+  }
+
   inputEl.value = "";
   addUser(text);
   sendEl.disabled = true;
@@ -349,11 +412,17 @@ async function send() {
     const resp = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history, session_id: browserSessionId }),
+      body: JSON.stringify({
+        message: text,
+        history,
+        session_id: browserSessionId,
+        turnstile_token: turnstileToken,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) {
-      addAssistant("Erro: " + (data.detail || resp.statusText), []);
+      addAssistant("Erro: " + apiErrorMessage(data, resp.statusText), []);
+      resetTurnstileWidget();
       return;
     }
     if (data.session_id) {
@@ -367,6 +436,7 @@ async function send() {
     if (data.consent_status === "waiting") {
       startConsentPoll();
     }
+    resetTurnstileWidget();
   } catch (err) {
     addAssistant("Não foi possível conectar. Tente novamente.", []);
   } finally {
