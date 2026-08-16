@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Confirmar entrada no grupo</title>
+<style>
+  :root { --bg:#0f2a1c; --card:#fff; --text:#17301f; --muted:#5b6b60; --accent:#1e7a4d; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at top, #1e7a4d 0%, #0f2a1c 70%);
+    padding: 24px;
+  }
+  .card {
+    background: var(--card); color: var(--text); border-radius: 18px; max-width: 420px; width: 100%;
+    padding: 36px 28px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  h1 { margin: 0 0 12px; font-size: 1.4rem; }
+  p { color: var(--muted); line-height: 1.5; margin: 0 0 24px; }
+  #turnstile-box { display: flex; justify-content: center; margin-bottom: 16px; min-height: 65px; }
+  button {
+    width: 100%; border: none; background: var(--accent); color: #fff; font-weight: 700;
+    font-size: 1rem; padding: 14px 16px; border-radius: 12px; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .result { margin-top: 16px; font-size: 0.95rem; }
+  .ok { color: var(--accent); font-weight: 600; }
+  .err { color: #b42318; font-weight: 600; }
+</style>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</head>
+<body>
+<div class="card">
+  <h1 id="title">Confirmar entrada</h1>
+  <p id="subtitle">Toque abaixo para confirmar que deseja entrar no grupo de promoções no WhatsApp.</p>
+  <div id="turnstile-box"></div>
+  <button type="button" id="confirm-btn">Confirmar minha entrada</button>
+  <div class="result" id="result"></div>
+</div>
+<script>
+const token = location.pathname.split("/").filter(Boolean).pop() || "";
+const btn = document.getElementById("confirm-btn");
+const resultEl = document.getElementById("result");
+let turnstileEnabled = false;
+let turnstileWidgetId = null;
+
+async function setupTurnstile() {
+  try {
+    const cfg = await (await fetch("/api/chat/config")).json();
+    turnstileEnabled = !!cfg.turnstile_enabled;
+    if (turnstileEnabled && cfg.turnstile_site_key && typeof turnstile !== "undefined") {
+      turnstileWidgetId = turnstile.render("#turnstile-box", {
+        sitekey: cfg.turnstile_site_key,
+        theme: "light",
+      });
+    }
+  } catch (e) {
+    turnstileEnabled = false;
+  }
+}
+
+async function accept() {
+  btn.disabled = true;
+  resultEl.textContent = "Confirmando…";
+
+  let turnstileToken = null;
+  if (turnstileEnabled) {
+    if (turnstileWidgetId === null || typeof turnstile === "undefined") {
+      resultEl.innerHTML = `<span class="err">Verificacao anti-bot ainda carregando. Aguarde e tente de novo.</span>`;
+      btn.disabled = false;
+      return;
+    }
+    turnstileToken = turnstile.getResponse(turnstileWidgetId);
+    if (!turnstileToken) {
+      resultEl.innerHTML = `<span class="err">Complete a verificacao anti-bot acima.</span>`;
+      btn.disabled = false;
+      return;
+    }
+  }
+
+  try {
+    const resp = await fetch(`/api/chat/consent/accept/${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnstile_token: turnstileToken }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      resultEl.innerHTML = `<span class="ok">${data.message}</span>`;
+      document.getElementById("title").textContent = "Tudo certo!";
+      document.getElementById("subtitle").textContent = "Pode fechar esta pagina e voltar ao chat no site.";
+      btn.style.display = "none";
+      document.getElementById("turnstile-box").style.display = "none";
+    } else {
+      resultEl.innerHTML = `<span class="err">${data.message}</span>`;
+      btn.disabled = false;
+      if (turnstileEnabled && turnstileWidgetId !== null) turnstile.reset(turnstileWidgetId);
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<span class="err">Erro de conexao. Tente novamente.</span>`;
+    btn.disabled = false;
+  }
+}
+
+if (!token || token.length < 16) {
+  document.getElementById("title").textContent = "Link invalido";
+  document.getElementById("subtitle").textContent = "Solicite um novo convite pelo chat no site.";
+  btn.style.display = "none";
+} else {
+  setupTurnstile();
+  btn.addEventListener("click", accept);
+}
+</script>
+</body>
+</html>

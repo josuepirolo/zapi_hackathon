@@ -20,14 +20,20 @@ git pull
 docker compose up -d --build
 ```
 
-Variáveis no `.env`: `WEBHOOK_SHARED_SECRET`, `OPENAPI_KEY`, opcional `OPENAI_MODEL`.
+Variáveis no `.env`: `WEBHOOK_SHARED_SECRET`, `OPENAPI_KEY`, opcional `OPENAI_MODEL`, `PUBLIC_BASE_URL`.
+
+Anti-bot (chat `/promocoes`): `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (Cloudflare Turnstile).
+Rate limit in-memory por IP: `CHAT_RATE_LIMIT_PER_MINUTE` (default 8), `CHAT_POLL_RATE_LIMIT_PER_MINUTE` (90), `CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE` (15).
 
 Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
 
 ## Demo chat (`/promocoes`)
 
 1. Abrir `https://desafiozapi.py.tec.br/promocoes`
-2. Clicar **Falar com a assistente**
-3. Pedir para entrar no grupo → informar WhatsApp com DDI
-4. Confirmar → a IA chama `group-add-participant` ou `group-create` + `send-text`
-5. Chips **MCP · tool-name** aparecem abaixo da resposta
+2. Informar WhatsApp com DDI e confirmar o número
+3. Receber **link trackeado** no WhatsApp (`send-text` via MCP)
+4. Tocar no link → `/confirmar/{token}` → entra no grupo
+5. O chat faz **polling** (`GET /api/chat/consent/{session_id}`) até detectar aceite
+
+Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie não é obrigatório.
+Estado do link: SQLite (`chat_consent_sessions`), sem Redis.

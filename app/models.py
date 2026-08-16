@@ -72,3 +72,34 @@ class Contact(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     campaign: Mapped["Campaign"] = relationship(back_populates="contacts")
+
+
+class ChatLinkStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    EXPIRED = "expired"
+
+
+class ChatConsentSession(Base):
+    """Consentimento via link trackeado no chat publico (/promocoes)."""
+
+    __tablename__ = "chat_consent_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    browser_session_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    token: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    phone: Mapped[str] = mapped_column(String, nullable=False)
+    campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
+    status: Mapped[ChatLinkStatus] = mapped_column(String, default=ChatLinkStatus.PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatHumanVerification(Base):
+    """Turnstile ok uma vez por sessao do browser — nao repete a cada mensagem."""
+
+    __tablename__ = "chat_human_verifications"
+
+    browser_session_id: Mapped[str] = mapped_column(String, primary_key=True)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

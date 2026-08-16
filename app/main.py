@@ -28,7 +28,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    from app.config import TURNSTILE_ENABLED
+
     await init_models()
+    if not TURNSTILE_ENABLED:
+        logging.getLogger("delega").warning(
+            "Turnstile desativado (defina NEXT_PUBLIC_TURNSTILE_SITE_KEY + TURNSTILE_SECRET_KEY em producao)."
+        )
     yield
 
 
@@ -64,3 +70,8 @@ async def landing() -> FileResponse:
 @app.get("/promocoes")
 async def promocoes() -> FileResponse:
     return FileResponse(STATIC_DIR / "promocoes.html")
+
+
+@app.get("/confirmar/{token}")
+async def confirmar_link(token: str) -> FileResponse:
+    return FileResponse(STATIC_DIR / "confirmar.html")

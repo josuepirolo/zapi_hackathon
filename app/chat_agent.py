@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -17,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.campaign_defaults import INVITATION_MESSAGE, TRIGGER_KEYWORD, WELCOME_MESSAGE
+from app.chat_consent import start_tracked_consent
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.models import Campaign
 
@@ -24,6 +27,13 @@ logger = logging.getLogger("delega.chat_agent")
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 _MAX_TOOL_ROUNDS = 8
+
+
+@dataclass
+class ChatTurnResult:
+    reply: str
+    tools_used: list[str]
+    consent_status: str = "none"
 
 # Schemas alinhados ao MCP Z-API (docs/zapi-mcp-capabilities.md).
 MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
@@ -171,6 +181,81 @@ async def _latest_campaign(session: AsyncSession) -> Campaign | None:
     return result.scalar_one_or_none()
 
 
+_PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{8,}\d|\d{10,13})")
+_CONFIRM_RE = re.compile(
+    r"\b(sim|confirmo|confirmar|correto|certo|isso|pode|ok|okay|envia|envie|manda|mande)\b",
+    re.IGNORECASE,
+)
+_ASK_CONFIRM_RE = re.compile(
+    r"\b(confirm|correto|certo|numero|número|whatsapp|ddi|telefone)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_phone(raw: str) -> str | None:
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) < 10:
+        return None
+    if len(digits) in (10, 11) and not digits.startswith("55"):
+        digits = "55" + digits
+    if len(digits) < 12 or len(digits) > 13:
+        return None
+    return digits
+
+
+def _extract_phone(text: str) -> str | None:
+    for match in _PHONE_RE.findall(text):
+        normalized = _normalize_phone(match)
+        if normalized:
+            return normalized
+    return None
+
+
+def _phones_from_context(history: list[dict[str, str]], user_message: str) -> list[str]:
+    found: list[str] = []
+    for item in [*history[-12:], {"role": "user", "content": user_message}]:
+        if item.get("role") != "user":
+            continue
+        phone = _extract_phone((item.get("content") or "").strip())
+        if phone and phone not in found:
+            found.append(phone)
+    return found
+
+
+def _latest_assistant_text(history: list[dict[str, str]]) -> str:
+    for item in reversed(history[-8:]):
+        if item.get("role") == "assistant":
+            return (item.get("content") or "").strip()
+    return ""
+
+
+def _is_explicit_confirmation(text: str) -> bool:
+    return bool(_CONFIRM_RE.search(text.strip()))
+
+
+def _assistant_asked_phone_confirmation(history: list[dict[str, str]]) -> bool:
+    return bool(_ASK_CONFIRM_RE.search(_latest_assistant_text(history)))
+
+
+def _should_send_whatsapp_invite(history: list[dict[str, str]], user_message: str) -> str | None:
+    """Telefone confirmado pelo visitante — dispara send-text de forma deterministica."""
+    text = user_message.strip()
+    phone_in_message = _extract_phone(text)
+    phones = _phones_from_context(history, user_message)
+
+    if phone_in_message and (_is_explicit_confirmation(text) or _assistant_asked_phone_confirmation(history)):
+        return phone_in_message
+
+    if _is_explicit_confirmation(text) and phones:
+        return phones[-1]
+
+    if phone_in_message and len(phones) >= 2 and phone_in_message == phones[-1]:
+        # Visitante corrigiu o numero depois que a assistente pediu confirmacao.
+        return phone_in_message
+
+    return None
+
+
 def _build_system_prompt(campaign: Campaign | None) -> str:
     if campaign and campaign.whatsapp_group_id:
         group_line = (
@@ -193,12 +278,11 @@ e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente ac
 
 Fluxo sugerido:
 1. Apresente-se e pergunte se a pessoa quer receber novidades/promocoes no WhatsApp.
-2. Se sim, peca o WhatsApp com DDI (ex.: 5511999999999) — confirme antes de agir.
-3. Com telefone confirmado:
-   - Se ja existe grupo: prefira group-add-participant com groupId abaixo.
-   - Se nao existe grupo: group-create com groupName da campanha e phones=[telefone], autoInvite=true.
-   - Envie send-text privado explicando proximo passo (palavra-chave ou convite).
-4. Nunca envie spam; so chame tools quando o visitante concordar explicitamente.
+2. Se sim, peca o WhatsApp com DDI (ex.: 5511999999999) — confirme o numero antes de agir.
+3. Com telefone confirmado, o sistema envia automaticamente um link trackeado no WhatsApp.
+   A confirmacao e o visitante abrir esse link no celular — nao e codigo numerico nem SIM/NAO no privado.
+4. Enquanto o link nao for aberto, o chat no site fica aguardando (polling).
+5. Nunca diga que enviou link sem o backend ter disparado send-text.
 
 Contexto fixo:
 - Palavra-chave opt-in alternativa: {TRIGGER_KEYWORD}
@@ -224,9 +308,18 @@ async def run_chat_turn(
     session: AsyncSession,
     history: list[dict[str, str]],
     user_message: str,
-) -> tuple[str, list[str]]:
+    browser_session_id: str,
+) -> ChatTurnResult:
     """Executa um turno completo (pode incluir varias chamadas MCP)."""
     campaign = await _latest_campaign(session)
+
+    confirmed_phone = _should_send_whatsapp_invite(history, user_message)
+    if confirmed_phone:
+        ok, auto_reply, auto_tools, consent_status = await start_tracked_consent(
+            session, browser_session_id, confirmed_phone
+        )
+        return ChatTurnResult(reply=auto_reply, tools_used=auto_tools, consent_status=consent_status)
+
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": _build_system_prompt(campaign)},
     ]
@@ -251,9 +344,9 @@ async def run_chat_turn(
             )
         except Exception:
             logger.exception("Falha OpenAI no chat publico")
-            return (
-                "Desculpe, nao consegui processar agora. Tente novamente em instantes.",
-                tools_used,
+            return ChatTurnResult(
+                reply="Desculpe, nao consegui processar agora. Tente novamente em instantes.",
+                tools_used=tools_used,
             )
 
         choice = completion.choices[0].message
@@ -306,9 +399,9 @@ async def run_chat_turn(
         reply = (choice.content or "").strip()
         if not reply:
             reply = "Como posso ajudar voce com nossas promocoes no WhatsApp?"
-        return reply, tools_used
+        return ChatTurnResult(reply=reply, tools_used=tools_used)
 
-    return (
-        "Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
-        tools_used,
+    return ChatTurnResult(
+        reply="Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
+        tools_used=tools_used,
     )
