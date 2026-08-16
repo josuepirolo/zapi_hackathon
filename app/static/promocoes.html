@@ -177,18 +177,6 @@
     background: var(--chat-bg);
     border-top: 1px solid #e8ece9;
   }
-  .turnstile-section.verified {
-    border-top-color: #1e7a4d;
-    background: #eef8f2;
-  }
-  .turnstile-verified-label {
-    display: none;
-    margin: 0 0 8px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: #1e7a4d;
-  }
-  .turnstile-section.verified .turnstile-verified-label { display: block; }
   .turnstile-section.hidden { display: none; }
 </style>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -234,7 +222,6 @@
   </div>
   <div class="chat-messages" id="messages"></div>
   <div class="turnstile-section" id="turnstile-section">
-    <p class="turnstile-verified-label" id="turnstile-verified-label">Verificação Cloudflare concluída</p>
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
@@ -264,6 +251,22 @@ let browserSessionId = localStorage.getItem("delega_chat_session");
 if (!browserSessionId) {
   browserSessionId = crypto.randomUUID();
   localStorage.setItem("delega_chat_session", browserSessionId);
+}
+
+function maskPhoneDigits(phone) {
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length < 8) return phone;
+  if (digits.length <= 8) return digits.slice(0, 2) + "***" + digits.slice(-2);
+  return digits.slice(0, 4) + "***" + digits.slice(-4);
+}
+
+function maskPhonesInText(text) {
+  return String(text).replace(/(?:\+?\d[\d\s().-]{8,}\d|\d{10,13})/g, (raw) => {
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length < 10) return raw;
+    const masked = maskPhoneDigits(digits);
+    return raw.trim().startsWith("+") ? "+" + masked : masked;
+  });
 }
 
 function apiErrorMessage(data, statusText) {
@@ -308,8 +311,8 @@ function setSecurityCheck(on) {
   }
 }
 
-function markTurnstileVerifiedUI() {
-  document.getElementById("turnstile-section").classList.add("verified");
+function hideTurnstileSection() {
+  document.getElementById("turnstile-section").classList.add("hidden");
 }
 
 async function confirmHumanOnServer(token) {
@@ -386,12 +389,12 @@ function unlockChatAfterHuman() {
   humanVerified = true;
   setSecurityCheck(false);
   setSendEnabled(true);
-  markTurnstileVerifiedUI();
+  hideTurnstileSection();
   if (!welcomedAfterVerify) {
     welcomedAfterVerify = true;
     addAssistant(
       "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-      "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
+      "(ex.: 5544***9999). Envio um link de confirmação no celular e confirmo aqui quando você tocar nele. Quer participar?",
       []
     );
   }
@@ -403,7 +406,7 @@ function onTurnstileExpired() {
   humanVerified = false;
   setSendEnabled(false);
   setSecurityCheck(true);
-  document.getElementById("turnstile-section").classList.remove("verified");
+  document.getElementById("turnstile-section").classList.remove("hidden");
   retryTurnstile();
 }
 
@@ -426,7 +429,9 @@ function startTurnstileWidget() {
 
 function retryTurnstile() {
   if (!turnstileEnabled || humanVerified) return;
-  document.getElementById("turnstile-section").style.display = "";
+  const section = document.getElementById("turnstile-section");
+  section.classList.remove("hidden");
+  section.style.display = "";
   if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
     turnstile.reset(turnstileWidgetId);
   } else {
@@ -526,7 +531,7 @@ function openChat() {
       if (humanVerified) {
         addAssistant(
           "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-          "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
+          "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
           []
         );
       } else if (turnstileEnabled) {
@@ -538,7 +543,7 @@ function openChat() {
       } else {
         addAssistant(
           "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-          "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
+          "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
           []
         );
       }
@@ -560,7 +565,7 @@ function addUser(text) {
   const wrap = document.createElement("div");
   wrap.className = "msg user";
   wrap.innerHTML = `<div class="msg-bubble"></div>`;
-  wrap.querySelector(".msg-bubble").textContent = text;
+  wrap.querySelector(".msg-bubble").textContent = maskPhonesInText(text);
   messagesEl.appendChild(wrap);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -573,7 +578,7 @@ function addAssistant(text, tools) {
     chips = `<div class="tool-chips">${tools.map(t => `<span class="tool-chip">MCP · ${t}</span>`).join("")}</div>`;
   }
   wrap.innerHTML = `<div class="msg-bubble"></div>${chips}`;
-  wrap.querySelector(".msg-bubble").textContent = text;
+  wrap.querySelector(".msg-bubble").textContent = maskPhonesInText(text);
   messagesEl.appendChild(wrap);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }

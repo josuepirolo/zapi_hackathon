@@ -25,6 +25,7 @@ from app.config import (
     TURNSTILE_SITE_KEY,
 )
 from app.db import get_session
+from app.phone_mask import mask_phones_in_text
 from app.rate_limit import allow
 from app.turnstile import verify_turnstile
 
@@ -166,7 +167,7 @@ async def public_chat(
     if status not in ("none", "waiting", "accepted", "expired"):
         status = "none"
     return ChatResponse(
-        reply=result.reply,
+        reply=mask_phones_in_text(result.reply),
         tools_used=result.tools_used,
         consent_status=status,  # type: ignore[arg-type]
         session_id=browser_session_id,
