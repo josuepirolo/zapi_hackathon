@@ -167,10 +167,17 @@
     padding: 6px 12px 10px; background: #fff;
   }
   #turnstile-box {
-    position: absolute; width: 0; height: 0; overflow: hidden;
-    opacity: 0; pointer-events: none;
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    min-height: 65px;
   }
-  .turnstile-section { display: none; }
+  .turnstile-section {
+    padding: 10px 16px 8px;
+    background: var(--chat-bg);
+    border-top: 1px solid #e8ece9;
+  }
+  .turnstile-section.hidden { display: none; }
 </style>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
@@ -214,7 +221,7 @@
     <button type="button" class="close-btn" id="close-chat" aria-label="Fechar">&times;</button>
   </div>
   <div class="chat-messages" id="messages"></div>
-  <div class="turnstile-section" id="turnstile-section" aria-hidden="true">
+  <div class="turnstile-section hidden" id="turnstile-section">
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
@@ -302,7 +309,7 @@ function onTurnstileVerified() {
     .then(({ resp, data }) => {
       if (!resp.ok) {
         setSecurityCheck(true);
-        retryInvisibleTurnstile();
+        retryTurnstile();
         return;
       }
       if (data.session_id) {
@@ -313,7 +320,7 @@ function onTurnstileVerified() {
     })
     .catch(() => {
       setSecurityCheck(true);
-      retryInvisibleTurnstile();
+      retryTurnstile();
     });
 }
 
@@ -321,6 +328,7 @@ function unlockChatAfterHuman() {
   humanVerified = true;
   setSecurityCheck(false);
   setSendEnabled(true);
+  document.getElementById("turnstile-section").classList.add("hidden");
   addAssistant(
     "Agora sim! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
     "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
@@ -333,20 +341,19 @@ function onTurnstileExpired() {
   if (!humanVerified) {
     setSendEnabled(false);
     setSecurityCheck(true);
-    retryInvisibleTurnstile();
+    retryTurnstile();
   }
 }
 
-function startInvisibleTurnstile() {
+function startTurnstileWidget() {
   if (!turnstileEnabled || humanVerified || !turnstileSiteKey) return;
+  document.getElementById("turnstile-section").classList.remove("hidden");
   const run = () => {
-    if (turnstileWidgetId !== null) {
-      turnstile.execute(turnstileWidgetId);
-      return;
-    }
+    if (turnstileWidgetId !== null) return;
     turnstileWidgetId = turnstile.render("#turnstile-box", {
       sitekey: turnstileSiteKey,
-      size: "invisible",
+      theme: "light",
+      size: "normal",
       callback: onTurnstileVerified,
       "expired-callback": onTurnstileExpired,
     });
@@ -355,20 +362,20 @@ function startInvisibleTurnstile() {
   else turnstile.ready(run);
 }
 
-function retryInvisibleTurnstile() {
+function retryTurnstile() {
   if (!turnstileEnabled || humanVerified) return;
+  document.getElementById("turnstile-section").classList.remove("hidden");
   if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
     turnstile.reset(turnstileWidgetId);
-    turnstile.execute(turnstileWidgetId);
   } else {
-    startInvisibleTurnstile();
+    startTurnstileWidget();
   }
 }
 
 function beginSecurityVerification() {
   setSendEnabled(false);
   setSecurityCheck(true);
-  startInvisibleTurnstile();
+  startTurnstileWidget();
 }
 
 async function checkExistingHumanVerification() {
@@ -389,6 +396,7 @@ async function checkExistingHumanVerification() {
       humanVerified = true;
       setSendEnabled(true);
       setSecurityCheck(false);
+      document.getElementById("turnstile-section").classList.add("hidden");
     } else {
       beginSecurityVerification();
     }
@@ -460,7 +468,7 @@ function openChat() {
         );
       } else if (turnstileEnabled) {
         addAssistant(
-          "Olá! Pode ir escrevendo — estou rodando a verificação de segurança automaticamente. " +
+          "Olá! Pode ir escrevendo — a verificação de segurança roda sozinha ali embaixo. " +
           "Libero o enviar assim que terminar.",
           []
         );
