@@ -225,7 +225,7 @@
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
-    <input id="input" type="text" placeholder="Pode digitar — aguardando verificação de segurança…" autocomplete="off" />
+    <input id="input" type="text" placeholder="Aguardando verificação de segurança…" autocomplete="off" disabled />
     <button type="button" id="send" disabled>Enviar</button>
   </div>
   <div class="mcp-foot">Tools MCP executadas aparecem abaixo de cada resposta</div>
@@ -295,9 +295,15 @@ async function loadChatConfig() {
 
 function setSendEnabled(on) {
   sendEl.disabled = !on;
-  inputEl.placeholder = on
-    ? "Digite sua mensagem…"
-    : "Pode digitar — aguardando verificação de segurança…";
+  if (on) {
+    inputEl.disabled = false;
+    inputEl.placeholder = "Digite sua mensagem…";
+  } else if (turnstileEnabled && !humanVerified) {
+    inputEl.disabled = true;
+    inputEl.placeholder = "Aguardando verificação de segurança…";
+  } else {
+    inputEl.placeholder = "Digite sua mensagem…";
+  }
 }
 
 function setSecurityCheck(on) {
@@ -397,6 +403,7 @@ function unlockChatAfterHuman() {
     welcomedAfterVerify = true;
     showWelcomeAndPrivacy("Agora sim! Sou a assistente do Tech News (novidades de IA e MCP).");
   }
+  resumeConsentIfNeeded();
   inputEl.focus();
 }
 
@@ -479,6 +486,22 @@ function stopConsentPoll() {
   }
 }
 
+function markConsentWaiting() {
+  sessionStorage.setItem("delega_consent_waiting", "1");
+}
+
+function clearConsentWaiting() {
+  sessionStorage.removeItem("delega_consent_waiting");
+}
+
+function isConsentWaitingMarked() {
+  return sessionStorage.getItem("delega_consent_waiting") === "1";
+}
+
+function isConsentDoneMarked() {
+  return sessionStorage.getItem("delega_consent_done") === "1";
+}
+
 const WAITING_LABELS = {
   pending: "Aguardando você tocar no link de confirmação no WhatsApp…",
   creating_group: "Criando o grupo no WhatsApp…",
@@ -506,6 +529,7 @@ function setWaiting(text) {
 
 function startConsentPoll(initialStatus) {
   stopConsentPoll();
+  markConsentWaiting();
   const status = CONSENT_WAITING_STATUSES.has(initialStatus) ? initialStatus : "pending";
   setWaiting(WAITING_LABELS[status]);
   inputEl.disabled = true;
@@ -516,6 +540,8 @@ function startConsentPoll(initialStatus) {
 
 function handleConsentAccepted(data) {
   stopConsentPoll();
+  clearConsentWaiting();
+  sessionStorage.setItem("delega_consent_done", "1");
   setWaiting(null);
   const msg =
     data.message ||
@@ -546,6 +572,7 @@ async function pollConsent() {
       handleConsentAccepted(data);
     } else if (data.status === "expired") {
       stopConsentPoll();
+      clearConsentWaiting();
       setWaiting(null);
       addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
       reenableAfterConsent();
@@ -559,13 +586,20 @@ async function pollConsent() {
 
 async function resumeConsentIfNeeded() {
   if (pollTimer) return;
+  // So retoma se o visitante ja enviou o telefone nesta aba (evita banner fantasma
+  // de consentimento pendente antigo no servidor antes do Turnstile/boas-vindas).
+  if (!isConsentWaitingMarked()) return;
+  if (turnstileEnabled && !humanVerified) return;
   try {
     const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
     const data = await resp.json();
     if (CONSENT_WAITING_STATUSES.has(data.status)) {
       startConsentPoll(data.status);
-    } else if (data.status === "accepted" && !consentAcceptedHintShown) {
+    } else if (data.status === "accepted" && !consentAcceptedHintShown && !isConsentDoneMarked()) {
       handleConsentAccepted(data);
+    } else if (data.status === "expired" || data.status === "none") {
+      clearConsentWaiting();
+      setWaiting(null);
     }
   } catch (err) {
     /* silencioso — usuario ainda nao iniciou fluxo */
@@ -573,6 +607,9 @@ async function resumeConsentIfNeeded() {
 }
 
 function showWelcomeAndPrivacy(intro) {
+  if (isConsentWaitingMarked() || isConsentDoneMarked()) {
+    return;
+  }
   const privacy =
     "🔒 Sua privacidade importa. Vamos usar seu WhatsApp só pra verificar seu acesso e realizar esta experiência de " +
     "demonstração — seus dados não são compartilhados e você pode encerrar sua participação quando quiser.";
@@ -608,7 +645,9 @@ function openChat() {
         showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       }
     }
-    await resumeConsentIfNeeded();
+    if (humanVerified) {
+      await resumeConsentIfNeeded();
+    }
     if (humanVerified && !pollTimer) inputEl.focus();
   });
 }
