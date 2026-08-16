@@ -501,6 +501,13 @@ function startConsentPoll() {
   pollTimer = setInterval(pollConsent, 2000);
 }
 
+function reenableAfterConsent() {
+  inputEl.disabled = false;
+  if (humanVerified) setSendEnabled(true);
+  else setSendEnabled(false);
+  inputEl.focus();
+}
+
 async function pollConsent() {
   try {
     const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
@@ -511,10 +518,12 @@ async function pollConsent() {
       const msg = "Perfeito! Confirmamos seu clique no link. Bem-vindo(a) ao Tech News!";
       addAssistant(msg, data.tools_used || ["send-text", "group-add-participant"]);
       history.push({ role: "assistant", content: msg });
+      reenableAfterConsent();
     } else if (data.status === "expired") {
       stopConsentPoll();
       setWaiting(false);
       addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
+      reenableAfterConsent();
     }
   } catch (err) {
     /* mantém polling */
@@ -650,10 +659,12 @@ async function send() {
     addAssistant("Não foi possível conectar. Verifique sua rede e tente de novo.", []);
   } finally {
     setTyping(false);
-    inputEl.disabled = false;
-    if (humanVerified) setSendEnabled(true);
-    else setSendEnabled(false);
-    inputEl.focus();
+    if (!pollTimer) {
+      inputEl.disabled = false;
+      if (humanVerified) setSendEnabled(true);
+      else setSendEnabled(false);
+      inputEl.focus();
+    }
   }
 }
 
