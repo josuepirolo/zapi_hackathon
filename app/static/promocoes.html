@@ -225,7 +225,7 @@
     <div id="turnstile-box"></div>
   </div>
   <div class="chat-input-row">
-    <input id="input" type="text" placeholder="Pode digitar — aguardando verificação de segurança…" autocomplete="off" />
+    <input id="input" type="text" placeholder="Aguardando verificação de segurança…" autocomplete="off" disabled />
     <button type="button" id="send" disabled>Enviar</button>
   </div>
   <div class="mcp-foot">Tools MCP executadas aparecem abaixo de cada resposta</div>
@@ -295,9 +295,15 @@ async function loadChatConfig() {
 
 function setSendEnabled(on) {
   sendEl.disabled = !on;
-  inputEl.placeholder = on
-    ? "Digite sua mensagem…"
-    : "Pode digitar — aguardando verificação de segurança…";
+  if (on) {
+    inputEl.disabled = false;
+    inputEl.placeholder = "Digite sua mensagem…";
+  } else if (turnstileEnabled && !humanVerified) {
+    inputEl.disabled = true;
+    inputEl.placeholder = "Aguardando verificação de segurança…";
+  } else {
+    inputEl.placeholder = "Digite sua mensagem…";
+  }
 }
 
 function setSecurityCheck(on) {
