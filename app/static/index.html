@@ -32,6 +32,27 @@
   }
   header h1 { margin: 0; font-size: 1.25rem; }
   header p { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
+  .header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .privacy-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+  .privacy-toggle input { width: auto; margin: 0; accent-color: var(--accent); }
+  .masked { font-family: ui-monospace, monospace; letter-spacing: 0.04em; color: var(--muted); }
   main {
     max-width: 780px;
     margin: 0 auto;
@@ -123,8 +144,16 @@
 <body>
 
 <header>
-  <h1>Gestão de Grupo de WhatsApp</h1>
-  <p>Painel demo MCP — criar/excluir campanhas, acoes nos participantes e checklist de tools.</p>
+  <div class="header-bar">
+    <div>
+      <h1>Gestão de Grupo de WhatsApp</h1>
+      <p>Painel demo MCP — criar/excluir campanhas, acoes nos participantes e checklist de tools.</p>
+    </div>
+    <label class="privacy-toggle" title="Oculta telefone, nome e identificadores na tela — recomendado para apresentacao">
+      <input type="checkbox" id="hide-sensitive" checked />
+      Ocultar dados sensíveis
+    </label>
+  </div>
 </header>
 
 <main>
@@ -181,8 +210,33 @@
 
 <script>
 const API = "";
+const PRIVACY_STORAGE_KEY = "delega-hide-sensitive";
 let campaigns = [];
 let selectedId = null;
+let hideSensitive = true;
+let lastContacts = [];
+
+function loadPrivacyPref() {
+  const stored = localStorage.getItem(PRIVACY_STORAGE_KEY);
+  hideSensitive = stored === null ? true : stored === "1";
+  document.getElementById("hide-sensitive").checked = hideSensitive;
+}
+
+function maskPhone(phone) {
+  if (!phone) return "—";
+  if (!hideSensitive) return phone;
+  return "••••••••";
+}
+
+function maskContactLabel(contact, index) {
+  if (!hideSensitive) return contact.name || contact.chat_lid;
+  return `Participante #${index + 1}`;
+}
+
+function maskGroupId(groupId) {
+  if (!groupId || hideSensitive) return null;
+  return groupId;
+}
 
 function toast(msg, isError) {
   const el = document.getElementById("toast");
@@ -248,9 +302,13 @@ function renderCampaignDetails(c) {
   const grupoStatus = c.whatsapp_group_id
     ? `<span class="badge ok">CRIADO</span>`
     : `<span class="badge warn">AGUARDANDO 1º ACEITE</span>`;
+  const groupIdLine = c.whatsapp_group_id
+    ? `<div>ID interno<br><b class="masked">${maskGroupId(c.whatsapp_group_id)}</b></div>`
+    : "";
   el.innerHTML = `
     <div class="status-line">
       <div>Grupo WhatsApp<br><b>${grupoStatus}</b></div>
+      ${groupIdLine}
       <div>Opt-in<br><b><a href="/participar" target="_blank">/participar</a></b></div>
     </div>
   `;
@@ -258,11 +316,12 @@ function renderCampaignDetails(c) {
 }
 
 function renderContacts(contacts) {
+  lastContacts = contacts;
   const tbody = document.querySelector("#contacts-table tbody");
   const empty = document.getElementById("contacts-empty");
   tbody.innerHTML = "";
   empty.style.display = contacts.length === 0 ? "block" : "none";
-  for (const contact of contacts) {
+  contacts.forEach((contact, index) => {
     const tr = document.createElement("tr");
     const inGroup = contact.membership_status === "ADDED";
     const adminBadge = contact.is_admin ? ` <span class="badge ok">ADMIN</span>` : "";
@@ -275,15 +334,21 @@ function renderContacts(contacts) {
           <button type="button" class="small secondary" style="color: var(--danger); border-color: var(--danger);" data-action="remove" data-id="${contact.id}">Remover</button>
         </div>`
       : "—";
+    const contactCell = hideSensitive
+      ? `<span class="masked">${maskContactLabel(contact, index)}</span>`
+      : (contact.name || contact.chat_lid);
+    const phoneCell = hideSensitive
+      ? `<span class="masked">${maskPhone(contact.phone)}</span>`
+      : (contact.phone || "—");
     tr.innerHTML = `
-      <td>${contact.name || contact.chat_lid}</td>
-      <td>${contact.phone || "—"}</td>
+      <td>${contactCell}</td>
+      <td>${phoneCell}</td>
       <td>${statusBadge(contact.consent_status)}</td>
       <td>${membershipBadge(contact.membership_status, contact.removal_pending)}${adminBadge}</td>
       <td>${actions}</td>
     `;
     tbody.appendChild(tr);
-  }
+  });
 }
 
 document.querySelector("#contacts-table tbody").addEventListener("click", async (e) => {
@@ -389,6 +454,15 @@ document.getElementById("content-submit").addEventListener("click", async () => 
   } finally {
     btn.disabled = !campaigns.find(c => c.id === selectedId)?.whatsapp_group_id;
   }
+});
+
+loadPrivacyPref();
+document.getElementById("hide-sensitive").addEventListener("change", (e) => {
+  hideSensitive = e.target.checked;
+  localStorage.setItem(PRIVACY_STORAGE_KEY, hideSensitive ? "1" : "0");
+  const c = campaigns.find(x => x.id === selectedId);
+  renderCampaignDetails(c);
+  renderContacts(lastContacts);
 });
 
 loadCampaigns().catch(err => toast("Erro ao carregar campanhas: " + err.message, true));
