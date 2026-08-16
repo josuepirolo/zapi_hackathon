@@ -166,7 +166,19 @@
     font-size: 0.65rem; color: var(--muted); text-align: center;
     padding: 6px 12px 10px; background: #fff;
   }
-  #turnstile-box { padding: 10px 16px; background: #fff; border-top: 1px solid #e8ece9; min-height: 68px; }
+  #turnstile-box { display: flex; justify-content: flex-start; min-height: 68px; }
+  .turnstile-section {
+    padding: 12px 16px 8px;
+    background: var(--chat-bg);
+    border-top: 1px solid #e8ece9;
+  }
+  .turnstile-hint {
+    margin: 0 0 10px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .turnstile-section.locked .turnstile-hint { color: #1e7a4d; font-weight: 600; }
 </style>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
@@ -210,9 +222,12 @@
     <button type="button" class="close-btn" id="close-chat" aria-label="Fechar">&times;</button>
   </div>
   <div class="chat-messages" id="messages"></div>
-  <div id="turnstile-box"></div>
+  <div class="turnstile-section locked" id="turnstile-section">
+    <p class="turnstile-hint" id="turnstile-hint">Verificação anti-bot (Cloudflare Turnstile)</p>
+    <div id="turnstile-box"></div>
+  </div>
   <div class="chat-input-row">
-    <input id="input" type="text" placeholder="Digite sua mensagem…" autocomplete="off" />
+    <input id="input" type="text" placeholder="Confirme que não é um robô abaixo…" autocomplete="off" disabled />
     <button type="button" id="send">Enviar</button>
   </div>
   <div class="mcp-foot">Tools MCP executadas aparecem abaixo de cada resposta</div>
@@ -231,6 +246,7 @@ let turnstileEnabled = false;
 let turnstileSiteKey = null;
 let turnstileWidgetId = null;
 let chatConfigLoaded = false;
+let humanVerified = false;
 let browserSessionId = localStorage.getItem("delega_chat_session");
 if (!browserSessionId) {
   browserSessionId = crypto.randomUUID();
@@ -258,12 +274,46 @@ async function loadChatConfig() {
   }
 }
 
+function setChatInputEnabled(on) {
+  inputEl.disabled = !on;
+  sendEl.disabled = !on;
+  inputEl.placeholder = on
+    ? "Digite sua mensagem…"
+    : "Confirme que não é um robô no botão abaixo…";
+}
+
+function onTurnstileVerified() {
+  const section = document.getElementById("turnstile-section");
+  const hint = document.getElementById("turnstile-hint");
+  if (!humanVerified) {
+    humanVerified = true;
+    section.classList.remove("locked");
+    setChatInputEnabled(true);
+    hint.textContent = "Antes de cada mensagem, marque o botão de novo (proteção anti-bot).";
+    addAssistant(
+      "Show! Agora sim — sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+      "(ex.: 5544999999999). Envio um link trackeado no celular e confirmo aqui quando você tocar nele. Quer participar?",
+      []
+    );
+    inputEl.focus();
+  }
+}
+
+function onTurnstileExpired() {
+  if (!humanVerified) {
+    setChatInputEnabled(false);
+    document.getElementById("turnstile-section").classList.add("locked");
+  }
+}
+
 function ensureTurnstileWidget() {
   if (!turnstileEnabled || !turnstileSiteKey || turnstileWidgetId !== null) return;
   if (typeof turnstile === "undefined") return;
   turnstileWidgetId = turnstile.render("#turnstile-box", {
     sitekey: turnstileSiteKey,
     theme: "light",
+    callback: onTurnstileVerified,
+    "expired-callback": onTurnstileExpired,
   });
 }
 
@@ -325,17 +375,33 @@ function openChat() {
   panel.classList.add("open");
   overlay.classList.add("open");
   loadChatConfig().then(() => {
-    ensureTurnstileWidget();
+    if (turnstileEnabled) {
+      setChatInputEnabled(false);
+      document.getElementById("turnstile-section").style.display = "";
+      ensureTurnstileWidget();
+    } else {
+      humanVerified = true;
+      document.getElementById("turnstile-section").style.display = "none";
+      setChatInputEnabled(true);
+    }
   });
   if (!opened) {
     opened = true;
-    addAssistant(
-      "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
-      "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat em tempo real. Quer participar?",
-      []
-    );
+    if (turnstileEnabled) {
+      addAssistant(
+        "Olá! Antes de começarmos, clique no botão logo abaixo para confirmar que você não é um robô — " +
+        "é rapidinho, prometo! Assim que passar, continuamos com as promoções no WhatsApp.",
+        []
+      );
+    } else {
+      addAssistant(
+        "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+        "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
+        []
+      );
+    }
   }
-  inputEl.focus();
+  if (humanVerified) inputEl.focus();
 }
 
 function closeChat() {
@@ -390,15 +456,20 @@ async function send() {
   await loadChatConfig();
   ensureTurnstileWidget();
 
+  if (turnstileEnabled && !humanVerified) {
+    addAssistant("Primeiro clique no botão anti-bot abaixo — é rapidinho!", []);
+    return;
+  }
+
   let turnstileToken = null;
   if (turnstileEnabled) {
     if (typeof turnstile === "undefined" || turnstileWidgetId === null) {
-      addAssistant("Aguarde a verificacao anti-bot carregar e marque o checkbox.", []);
+      addAssistant("Aguarde o botão anti-bot carregar.", []);
       return;
     }
     turnstileToken = turnstile.getResponse(turnstileWidgetId);
     if (!turnstileToken) {
-      addAssistant("Complete a verificacao anti-bot abaixo antes de enviar.", []);
+      addAssistant("Marque o botão anti-bot abaixo antes de enviar.", []);
       return;
     }
   }
