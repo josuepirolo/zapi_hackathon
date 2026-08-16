@@ -147,6 +147,7 @@
     background: var(--accent-light); color: var(--accent);
   }
   .typing { font-size: 0.8rem; color: var(--muted); padding: 8px 4px; }
+  .typing.waiting { color: #1e7a4d; font-weight: 600; }
   .chat-input-row {
     display: flex; gap: 8px; padding: 14px 16px;
     border-top: 1px solid #e8ece9; background: #fff;
@@ -187,7 +188,7 @@
     </div>
     <div class="feature">
       <h3>Opt-in seguro</h3>
-      <p>Só agimos no WhatsApp depois que você confirmar e informar seu número.</p>
+      <p>Só agimos no WhatsApp depois que você confirmar e tocar no link enviado.</p>
     </div>
   </div>
 </section>
@@ -222,6 +223,60 @@ const panel = document.getElementById("chat-panel");
 const overlay = document.getElementById("overlay");
 let history = [];
 let opened = false;
+let pollTimer = null;
+let browserSessionId = localStorage.getItem("delega_chat_session");
+if (!browserSessionId) {
+  browserSessionId = crypto.randomUUID();
+  localStorage.setItem("delega_chat_session", browserSessionId);
+}
+
+function stopConsentPoll() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function setWaiting(on) {
+  let el = document.getElementById("waiting");
+  if (on && !el) {
+    el = document.createElement("div");
+    el.id = "waiting";
+    el.className = "typing waiting";
+    el.textContent = "Aguardando você tocar no link de confirmação no WhatsApp…";
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  } else if (!on && el) {
+    el.remove();
+  }
+}
+
+function startConsentPoll() {
+  stopConsentPoll();
+  setWaiting(true);
+  pollConsent();
+  pollTimer = setInterval(pollConsent, 2000);
+}
+
+async function pollConsent() {
+  try {
+    const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
+    const data = await resp.json();
+    if (data.status === "accepted") {
+      stopConsentPoll();
+      setWaiting(false);
+      const msg = "Perfeito! Confirmamos seu clique no link. Bem-vindo(a) ao grupo de promoções!";
+      addAssistant(msg, data.tools_used || ["send-text", "group-add-participant"]);
+      history.push({ role: "assistant", content: msg });
+    } else if (data.status === "expired") {
+      stopConsentPoll();
+      setWaiting(false);
+      addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
+    }
+  } catch (err) {
+    /* mantém polling */
+  }
+}
 
 function openChat() {
   panel.classList.add("open");
@@ -229,9 +284,8 @@ function openChat() {
   if (!opened) {
     opened = true;
     addAssistant(
-      "Olá! Sou a assistente do grupo de promoções. Posso explicar os benefícios e, se quiser, " +
-      "te ajudar a entrar pelo WhatsApp (via MCP Z-API). " +
-      "Quando você confirmar seu número, envio uma mensagem pedindo SIM ou NÃO — não é código numérico. Quer participar?",
+      "Olá! Sou a assistente do grupo de promoções. Se quiser entrar, me passa seu WhatsApp com DDI " +
+      "(ex.: 5544999999999). Envio um link trackeado no celular — ao tocar nele, confirmo aqui no chat em tempo real. Quer participar?",
       []
     );
   }
@@ -295,17 +349,24 @@ async function send() {
     const resp = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history }),
+      body: JSON.stringify({ message: text, history, session_id: browserSessionId }),
     });
     const data = await resp.json();
     if (!resp.ok) {
       addAssistant("Erro: " + (data.detail || resp.statusText), []);
       return;
     }
+    if (data.session_id) {
+      browserSessionId = data.session_id;
+      localStorage.setItem("delega_chat_session", browserSessionId);
+    }
     addAssistant(data.reply, data.tools_used || []);
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: data.reply });
     if (history.length > 30) history = history.slice(-30);
+    if (data.consent_status === "waiting") {
+      startConsentPoll();
+    }
   } catch (err) {
     addAssistant("Não foi possível conectar. Tente novamente.", []);
   } finally {

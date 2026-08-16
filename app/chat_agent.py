@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.campaign_defaults import INVITATION_MESSAGE, TRIGGER_KEYWORD, WELCOME_MESSAGE
+from app.chat_consent import start_tracked_consent
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.models import Campaign
 
@@ -25,6 +27,13 @@ logger = logging.getLogger("delega.chat_agent")
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 _MAX_TOOL_ROUNDS = 8
+
+
+@dataclass
+class ChatTurnResult:
+    reply: str
+    tools_used: list[str]
+    consent_status: str = "none"
 
 # Schemas alinhados ao MCP Z-API (docs/zapi-mcp-capabilities.md).
 MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
@@ -247,35 +256,6 @@ def _should_send_whatsapp_invite(history: list[dict[str, str]], user_message: st
     return None
 
 
-async def _send_whatsapp_invite(campaign: Campaign | None, phone: str) -> tuple[bool, str, list[str]]:
-    invitation = campaign.invitation_message if campaign else INVITATION_MESSAGE
-    logger.info("Chat auto send-text para %s", phone)
-    try:
-        result = await mcp_client.call_tool("send-text", {"phone": phone, "message": invitation})
-    except Exception:
-        logger.exception("Falha send-text automatico no chat publico")
-        return (
-            False,
-            "Nao consegui enviar a mensagem no WhatsApp agora. Confira o numero com DDI (ex.: 5544999999999) e tente de novo.",
-            [],
-        )
-
-    if not mcp_client.tool_call_succeeded(result):
-        logger.warning("send-text recusou no chat publico: %r", result)
-        return (
-            False,
-            "O WhatsApp nao aceitou esse numero. Use DDI+DDD+numero, so digitos (ex.: 5544999999999).",
-            ["send-text"],
-        )
-
-    return (
-        True,
-        f"Pronto! Enviei uma mensagem no WhatsApp para {phone}. "
-        "Abra o app e responda SIM ou NAO — nao e um codigo numerico, e a confirmacao do convite.",
-        ["send-text"],
-    )
-
-
 def _build_system_prompt(campaign: Campaign | None) -> str:
     if campaign and campaign.whatsapp_group_id:
         group_line = (
@@ -299,10 +279,10 @@ e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente ac
 Fluxo sugerido:
 1. Apresente-se e pergunte se a pessoa quer receber novidades/promocoes no WhatsApp.
 2. Se sim, peca o WhatsApp com DDI (ex.: 5511999999999) — confirme o numero antes de agir.
-3. Com telefone confirmado, OBRIGATORIO chamar send-text com a mensagem de convite (SIM/NAO).
-   Nao existe codigo numerico — a confirmacao e responder SIM ou NAO no WhatsApp privado.
-4. Depois que a pessoa responder SIM no WhatsApp, o webhook do sistema cuida de group-add/group-create.
-5. Nunca diga que enviou WhatsApp sem chamar send-text. Nunca envie spam.
+3. Com telefone confirmado, o sistema envia automaticamente um link trackeado no WhatsApp.
+   A confirmacao e o visitante abrir esse link no celular — nao e codigo numerico nem SIM/NAO no privado.
+4. Enquanto o link nao for aberto, o chat no site fica aguardando (polling).
+5. Nunca diga que enviou link sem o backend ter disparado send-text.
 
 Contexto fixo:
 - Palavra-chave opt-in alternativa: {TRIGGER_KEYWORD}
@@ -328,17 +308,17 @@ async def run_chat_turn(
     session: AsyncSession,
     history: list[dict[str, str]],
     user_message: str,
-) -> tuple[str, list[str]]:
+    browser_session_id: str,
+) -> ChatTurnResult:
     """Executa um turno completo (pode incluir varias chamadas MCP)."""
     campaign = await _latest_campaign(session)
 
     confirmed_phone = _should_send_whatsapp_invite(history, user_message)
     if confirmed_phone:
-        ok, auto_reply, auto_tools = await _send_whatsapp_invite(campaign, confirmed_phone)
-        if ok:
-            return auto_reply, auto_tools
-        # Falha real no MCP: devolve erro claro sem deixar a IA inventar sucesso.
-        return auto_reply, auto_tools
+        ok, auto_reply, auto_tools, consent_status = await start_tracked_consent(
+            session, browser_session_id, confirmed_phone
+        )
+        return ChatTurnResult(reply=auto_reply, tools_used=auto_tools, consent_status=consent_status)
 
     messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": _build_system_prompt(campaign)},
@@ -364,9 +344,9 @@ async def run_chat_turn(
             )
         except Exception:
             logger.exception("Falha OpenAI no chat publico")
-            return (
-                "Desculpe, nao consegui processar agora. Tente novamente em instantes.",
-                tools_used,
+            return ChatTurnResult(
+                reply="Desculpe, nao consegui processar agora. Tente novamente em instantes.",
+                tools_used=tools_used,
             )
 
         choice = completion.choices[0].message
@@ -419,9 +399,9 @@ async def run_chat_turn(
         reply = (choice.content or "").strip()
         if not reply:
             reply = "Como posso ajudar voce com nossas promocoes no WhatsApp?"
-        return reply, tools_used
+        return ChatTurnResult(reply=reply, tools_used=tools_used)
 
-    return (
-        "Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
-        tools_used,
+    return ChatTurnResult(
+        reply="Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
+        tools_used=tools_used,
     )

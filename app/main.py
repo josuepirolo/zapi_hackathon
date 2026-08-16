@@ -64,3 +64,8 @@ async def landing() -> FileResponse:
 @app.get("/promocoes")
 async def promocoes() -> FileResponse:
     return FileResponse(STATIC_DIR / "promocoes.html")
+
+
+@app.get("/confirmar/{token}")
+async def confirmar_link(token: str) -> FileResponse:
+    return FileResponse(STATIC_DIR / "confirmar.html")
