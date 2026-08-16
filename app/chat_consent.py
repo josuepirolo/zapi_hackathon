@@ -221,7 +221,13 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
         return {"status": "none"}
 
     record = await _expire_if_needed(session, record, now)
-    payload: dict[str, str | list[str]] = {"status": record.status.value}
+    # SQLAlchemy mapeia ChatLinkStatus numa coluna String pura - ao reler
+    # do banco (nao no mesmo objeto Python recem-atribuido), devolve `str`
+    # puro, nao a instancia do StrEnum. `.value` quebra nesse caso
+    # (AttributeError: 'str' object has no attribute 'value', confirmado
+    # ao vivo 2026-08-16 - travava o polling do chat pra sempre). str()
+    # funciona igual nos dois casos (StrEnum.__str__ == .value).
+    payload: dict[str, str | list[str]] = {"status": str(record.status)}
     if record.status == ChatLinkStatus.ACCEPTED:
         payload["tools_used"] = record_tools_for_accept(record)
     return payload
