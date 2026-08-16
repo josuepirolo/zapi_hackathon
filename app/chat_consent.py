@@ -241,7 +241,7 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
 
 def record_tools_for_accept(record: ChatConsentSession) -> list[str]:
     # Heuristica simples pro chip da UI — detalhe fino nao e critico pro demo.
-    return ["send-text", "group-add-participant"]
+    return ["send-text", "group-add-participant", "send-image"]
 
 
 async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bool, str]:
@@ -266,11 +266,21 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     if campaign is None:
         return False, "Nenhuma campanha ativa no momento."
 
+    # Status intermediarios comitados aqui pra alimentar o polling do chat
+    # no browser de origem (aba/aparelho diferente de onde o link foi
+    # aberto) - ver `get_consent_poll_status`, que devolve `str(record.status)`
+    # cru sem mapear nada, entao qualquer valor novo do enum ja passa direto.
+    record.status = (
+        ChatLinkStatus.ADDING_PARTICIPANT if campaign.whatsapp_group_id else ChatLinkStatus.CREATING_GROUP
+    )
+    await session.commit()
+
     if not await ensure_phone_in_group(session, campaign, record.phone):
+        record.status = ChatLinkStatus.PENDING
+        await session.commit()
         return False, "Nao foi possivel adicionar voce ao grupo agora. Tente novamente pelo chat."
 
-    record.status = ChatLinkStatus.ACCEPTED
-    record.accepted_at = now
+    record.status = ChatLinkStatus.PREPARING_CONTENT
     await session.commit()
     await session.refresh(campaign)
 
@@ -282,6 +292,10 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
         )
     except Exception:
         logger.exception("Chat link: falha send-text pos-aceite para %s", record.phone)
+
+    record.status = ChatLinkStatus.ACCEPTED
+    record.accepted_at = now
+    await session.commit()
 
     logger.info("Chat link aceito token=%s phone=%s session=%s", token, record.phone, record.browser_session_id)
     return True, "Pronto! Voce entrou no grupo Tech News. Pode voltar ao chat no site."

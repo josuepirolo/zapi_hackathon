@@ -76,6 +76,9 @@ class Contact(Base):
 
 class ChatLinkStatus(StrEnum):
     PENDING = "pending"
+    CREATING_GROUP = "creating_group"
+    ADDING_PARTICIPANT = "adding_participant"
+    PREPARING_CONTENT = "preparing_content"
     ACCEPTED = "accepted"
     EXPIRED = "expired"
 
