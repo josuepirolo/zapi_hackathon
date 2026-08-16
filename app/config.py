@@ -8,6 +8,7 @@ original): as variaveis sao injetadas pelo ambiente (docker-compose
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
 def _required(name: str) -> str:
@@ -23,6 +24,16 @@ WEBHOOK_SHARED_SECRET = _required("WEBHOOK_SHARED_SECRET")
 OPENAI_API_KEY = _required("OPENAPI_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:////app/data/app.db")
+
+
+def _data_dir() -> Path:
+    if "///" in DATABASE_URL:
+        return Path(DATABASE_URL.split("///", 1)[1]).parent
+    return Path("/app/data")
+
+
+DATA_DIR = _data_dir()
+NEWS_ASSETS_DIR = Path(os.environ.get("NEWS_ASSETS_DIR", str(DATA_DIR / "news_assets")))
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://desafiozapi.py.tec.br").rstrip("/")
 CONSENT_LINK_TTL_MINUTES = int(os.environ.get("CONSENT_LINK_TTL_MINUTES", "30"))
 

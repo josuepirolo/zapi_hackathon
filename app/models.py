@@ -101,6 +101,9 @@ class ChatConsentSession(Base):
     # digitar o numero de outra pessoa no chat publico e descobrir se aquele
     # numero ja esta no grupo/e admin sem provar que e o dono dele.
     existing_member_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Grupo pessoal deste onboarding (1 participante + admin da instancia).
+    whatsapp_group_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    group_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

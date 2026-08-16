@@ -11,12 +11,14 @@ modelo exato) e configuravel via variavel de ambiente sem mudar codigo.
 
 from __future__ import annotations
 
+import base64
 import logging
+from pathlib import Path
 from typing import Literal
 
 from openai import AsyncOpenAI
 
-from app.config import OPENAI_API_KEY, OPENAI_MODEL
+from app.config import NEWS_ASSETS_DIR, OPENAI_API_KEY, OPENAI_MODEL
 
 logger = logging.getLogger("delega.ai")
 
@@ -99,21 +101,19 @@ async def interpret_confirmation(texto: str) -> Confirmation:
 # Confirmado contra doc oficial OpenAI (2026-08-13): modelos GPT Image
 # (`gpt-image-*`) sempre retornam base64 em `data[].b64_json` — o parametro
 # `response_format` so vale para dall-e-2/3 e gera 400 se enviado aqui.
-_PROMO_IMAGE_PROMPT = (
-    "Banner promocional vibrante e moderno para um grupo de ofertas no "
-    "WhatsApp. Estilo flat design, cores vivas (verde e dourado), "
-    "elementos de compras/promocao, sem nenhum texto ou letras na imagem."
-)
 _IMAGE_MODEL = "gpt-image-2"
 
 
-async def generate_promo_image_base64() -> str | None:
-    """Gera imagem de boas-vindas (prompt fixo) e retorna base64 em memoria
-    para `send-image` do MCP no grupo — nunca persiste nem publica URL."""
+def _news_image_path(news_id: str) -> Path:
+    safe_id = "".join(ch for ch in news_id if ch.isalnum() or ch in "-_")
+    return NEWS_ASSETS_DIR / f"{safe_id}.png"
+
+
+async def _generate_image_base64(prompt: str) -> str | None:
     try:
         result = await _client.images.generate(
             model=_IMAGE_MODEL,
-            prompt=_PROMO_IMAGE_PROMPT,
+            prompt=prompt,
             size="512x512",
             quality="low",
         )
@@ -123,5 +123,32 @@ async def generate_promo_image_base64() -> str | None:
             return None
         return b64
     except Exception:
-        logger.exception("Falha ao gerar imagem promocional via OpenAI")
+        logger.exception("Falha ao gerar imagem via OpenAI (modelo=%s)", _IMAGE_MODEL)
         return None
+
+
+async def get_cached_news_image_base64(news_id: str, prompt: str) -> str | None:
+    """Retorna base64 da imagem da noticia — le do disco ou gera uma vez e salva."""
+    path = _news_image_path(news_id)
+    if path.is_file():
+        logger.info("Imagem da noticia %s carregada do cache (%s)", news_id, path)
+        return base64.b64encode(path.read_bytes()).decode("ascii")
+
+    b64 = await _generate_image_base64(prompt)
+    if b64 is None:
+        return None
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(b64))
+        logger.info("Imagem da noticia %s gerada e salva em %s", news_id, path)
+    except OSError:
+        logger.exception("Falha ao salvar cache da imagem %s em %s", news_id, path)
+    return b64
+
+
+async def generate_promo_image_base64() -> str | None:
+    """Compatibilidade — preferir `get_cached_news_image_base64` com id da noticia."""
+    from app.news_content import DEFAULT_GROUP_NEWS
+
+    return await get_cached_news_image_base64(DEFAULT_GROUP_NEWS.id, DEFAULT_GROUP_NEWS.image_prompt)
