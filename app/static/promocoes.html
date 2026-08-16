@@ -701,7 +701,11 @@ async function send() {
       browserSessionId = data.session_id;
       localStorage.setItem("delega_chat_session", browserSessionId);
     }
-    addAssistant(data.reply, data.tools_used || []);
+    if (data.consent_status === "accepted") {
+      handleConsentAccepted({ message: data.reply, tools_used: data.tools_used || [] });
+    } else {
+      addAssistant(data.reply, data.tools_used || []);
+    }
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: data.reply });
     if (history.length > 30) history = history.slice(-30);
