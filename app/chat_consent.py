@@ -21,6 +21,7 @@ from app.phone_mask import mask_phone_digits
 from app.campaign_defaults import (
     ADMIN_ALREADY_MEMBER_MESSAGE,
     ALREADY_MEMBER_MESSAGE,
+    GROUP_ACCESS_LINK_DM,
     GROUP_NAME_PREFIX,
     INSTANCE_PHONE_BLOCKED_MESSAGE,
     JOINED_MESSAGE,
@@ -146,11 +147,11 @@ def _returning_member_chat_message(prior: ChatConsentSession, kind: str) -> str:
     if kind == "admin":
         return (
             f"Voce ja administra o grupo *{label}*! "
-            "Republicamos a novidade de hoje la — confira no WhatsApp."
+            "Enviei o link de acesso no WhatsApp e republicamos a novidade de hoje la."
         )
     return (
         f"Voce ja esta no grupo *{label}*! "
-        "Republicamos a novidade de hoje la — confira no WhatsApp."
+        "Enviei o link de acesso no WhatsApp e republicamos a novidade de hoje la."
     )
 
 
@@ -181,6 +182,7 @@ async def _finish_returning_member(
     session.add(record)
     await session.commit()
 
+    await _send_group_access_dm(prior.phone, prior.whatsapp_group_id, prior.group_name)
     await send_group_news(prior.whatsapp_group_id)
 
     record.status = ChatLinkStatus.ACCEPTED
@@ -195,7 +197,7 @@ async def _finish_returning_member(
         kind,
     )
     reply = _returning_member_chat_message(prior, kind)
-    return True, reply, ["group-metadata", "send-image"], "accepted"
+    return True, reply, ["group-metadata", "send-text", "send-image"], "accepted"
 
 
 async def _create_personal_group(
@@ -285,6 +287,34 @@ async def _send_welcome_dm(phone: str, record: ChatConsentSession) -> None:
         logger.exception("Chat link: falha send-text boas-vindas para %s", phone)
 
 
+async def _fetch_group_invitation_link(group_id: str) -> str | None:
+    try:
+        meta = await mcp_client.call_tool("group-metadata", {"groupId": group_id})
+        return mcp_client.extract_invitation_link(meta)
+    except Exception:
+        logger.exception("Chat link: falha group-metadata para invitationLink %s", group_id)
+        return None
+
+
+async def _send_group_access_dm(phone: str, group_id: str, group_name: str | None) -> bool:
+    """DM com link chat.whatsapp.com — abre o grupo direto (util na apresentacao)."""
+    link = await _fetch_group_invitation_link(group_id)
+    if not link:
+        logger.warning("Chat link: invitationLink indisponivel para grupo %s", group_id)
+        return False
+    label = group_name or GROUP_NAME_PREFIX
+    message = GROUP_ACCESS_LINK_DM.format(group_name=label, link=link)
+    try:
+        result = await mcp_client.call_tool("send-text", {"phone": phone, "message": message})
+    except Exception:
+        logger.exception("Chat link: falha send-text link do grupo para %s", phone)
+        return False
+    if not mcp_client.tool_call_succeeded(result):
+        logger.warning("Chat link: send-text link do grupo recusou para %s: %r", phone, result)
+        return False
+    return True
+
+
 async def _complete_onboarding(
     session: AsyncSession,
     record: ChatConsentSession,
@@ -295,6 +325,8 @@ async def _complete_onboarding(
     """Boas-vindas DM (opcional) + primeira news no grupo pessoal."""
     if resend_welcome:
         await _send_welcome_dm(record.phone, record)
+
+    await _send_group_access_dm(record.phone, group_id, record.group_name)
 
     record.status = ChatLinkStatus.PREPARING_CONTENT
     await session.commit()
@@ -500,7 +532,7 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
         "Chat link aceito token=%s phone=%s grupo=%s session=%s",
         token, record.phone, group_id, record.browser_session_id,
     )
-    return True, "Pronto! Seu grupo Tech News foi criado. Confira a novidade no WhatsApp."
+    return True, JOINED_MESSAGE
 
 
 async def has_accepted_chat_consent(session: AsyncSession, browser_session_id: str) -> bool:

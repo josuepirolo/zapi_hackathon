@@ -254,6 +254,17 @@ def tool_call_succeeded(mcp_result: dict[str, Any]) -> bool:
     return payload.get("success") is not False
 
 
+def extract_invitation_link(mcp_result: dict[str, Any]) -> str | None:
+    """Link chat.whatsapp.com/... do retorno de `group-metadata` (admin da instancia)."""
+    payload = parse_tool_payload(mcp_result)
+    if payload is None:
+        return None
+    link = payload.get("invitationLink")
+    if isinstance(link, str) and link.startswith("http"):
+        return link
+    return None
+
+
 def extract_group_id(mcp_result: dict[str, Any]) -> str | None:
     """Extrai o groupId do retorno de `group-create` (chaves observadas
     ao vivo variam - `groupId`/`id`/`phone`). `None` se o payload nao

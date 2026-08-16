@@ -40,3 +40,4 @@ Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie n�
 Estado do link: SQLite (`chat_consent_sessions`), sem Redis.
 Telefones exibidos no chat são mascarados (`5544***9999`); o backend usa o número real só para MCP.
 Quem **já tem grupo pessoal** (`#NNN`) reconhecido pelo telefone (com/sem 9º dígito) conclui direto no chat, sem novo link.
+Após criar ou reencontrar o grupo, o backend envia por DM o **link de convite** (`chat.whatsapp.com/...`) obtido via `group-metadata` — abre o grupo direto no celular, sem vasculhar contatos na demo.
