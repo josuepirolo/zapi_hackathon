@@ -39,3 +39,8 @@ DEMO_GROUP_MESSAGE = "Novidade no ar! Fique de olho nas proximas atualizacoes so
 JOINED_MESSAGE = (
     "Tudo pronto! Voce ja esta no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀"
 )
+
+POST_JOIN_CHAT_MESSAGE = (
+    "Abra seu WhatsApp agora — a novidade ja esta la. 📱 "
+    "Depois disso, pode me perguntar sobre IA, MCP ou esta demo."
+)

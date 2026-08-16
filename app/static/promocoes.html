@@ -240,6 +240,9 @@ const overlay = document.getElementById("overlay");
 let history = [];
 let opened = false;
 let pollTimer = null;
+let consentAcceptedHintShown = false;
+const POST_JOIN_HINT =
+  "Abra seu WhatsApp agora — a novidade já está lá. 📱 Depois disso, pode me perguntar sobre IA, MCP ou esta demo.";
 let turnstileEnabled = false;
 let turnstileSiteKey = null;
 let turnstileWidgetId = null;
@@ -521,8 +524,13 @@ async function pollConsent() {
       stopConsentPoll();
       setWaiting(null);
       const msg = data.message || "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
-      addAssistant(msg, data.tools_used || ["send-text", "group-add-participant", "send-image"]);
+      addAssistant(msg, []);
       history.push({ role: "assistant", content: msg });
+      if (!consentAcceptedHintShown) {
+        consentAcceptedHintShown = true;
+        addAssistant(POST_JOIN_HINT, []);
+        history.push({ role: "assistant", content: POST_JOIN_HINT });
+      }
       reenableAfterConsent();
     } else if (data.status === "expired") {
       stopConsentPoll();

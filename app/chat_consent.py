@@ -346,6 +346,20 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     return True, "Pronto! Voce entrou no grupo Tech News. Pode voltar ao chat no site."
 
 
+async def has_accepted_chat_consent(session: AsyncSession, browser_session_id: str) -> bool:
+    """True se a ultima sessao de link deste browser ja foi aceita (onboarding completo)."""
+    result = await session.execute(
+        select(ChatConsentSession)
+        .where(ChatConsentSession.browser_session_id == browser_session_id)
+        .order_by(ChatConsentSession.id.desc())
+        .limit(1)
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        return False
+    return str(record.status) == ChatLinkStatus.ACCEPTED.value
+
+
 async def is_human_verified(session: AsyncSession, browser_session_id: str) -> bool:
     now = datetime.now(timezone.utc)
     row = await session.get(ChatHumanVerification, browser_session_id)
