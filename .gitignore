@@ -12,3 +12,6 @@ _sdds_private/
 .claude/
 .agents/
 .cursor/
+
+# logs e Debug
+logs/
