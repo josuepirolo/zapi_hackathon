@@ -18,8 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
-from app.campaign_defaults import INVITATION_MESSAGE, TRIGGER_KEYWORD, WELCOME_MESSAGE
-from app.chat_consent import start_tracked_consent
+from app.campaign_defaults import (
+    INVITATION_MESSAGE,
+    POST_JOIN_CHAT_MESSAGE,
+    TRIGGER_KEYWORD,
+    WELCOME_MESSAGE,
+)
+from app.chat_consent import has_accepted_chat_consent, start_tracked_consent
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.models import Campaign
 
@@ -288,7 +293,44 @@ def _extract_name_from_history(history: list[dict[str, str]], user_message: str)
     return None
 
 
-def _build_system_prompt(campaign: Campaign | None) -> str:
+_POST_ONBOARDING_NOW_RE = re.compile(
+    r"\b(e agora|e dai|e depois|proximo passo|what now|what next)\b", re.IGNORECASE
+)
+_WHO_ARE_YOU_RE = re.compile(
+    r"\b(quem (e|é) vc|quem (e|é) voce|quem (e|é) você|what are you|who are you)\b", re.IGNORECASE
+)
+_WHO_MADE_YOU_RE = re.compile(
+    r"\b(quem (te )?fez|quem (te )?criou|who (made|created) you)\b", re.IGNORECASE
+)
+_PROMPT_LEAK_RE = re.compile(r"\b(prompt|system prompt|instrucoes internas|regras internas)\b", re.IGNORECASE)
+
+_IDENTITY_REPLY = (
+    "Sou a assistente do Tech News nesta demo do Desafio MCP Z-API 2026. "
+    "Conduzo a conversa aqui no site com OpenAI; o Server MCP oficial da Z-API executa as acoes no WhatsApp."
+)
+_WHO_MADE_REPLY = (
+    "Esta assistente foi criada para a demonstracao do hackathon: conversa via OpenAI "
+    "e acoes reais no WhatsApp pelo Server MCP Z-API."
+)
+
+
+def _post_onboarding_quick_reply(user_message: str) -> str | None:
+    text = user_message.strip()
+    if _PROMPT_LEAK_RE.search(text):
+        return (
+            "Nao posso compartilhar prompt ou detalhes internos. "
+            "Posso ajudar com IA, MCP, WhatsApp ou esta demo do Tech News."
+        )
+    if _WHO_MADE_YOU_RE.search(text):
+        return _WHO_MADE_REPLY
+    if _WHO_ARE_YOU_RE.search(text):
+        return _IDENTITY_REPLY
+    if _POST_ONBOARDING_NOW_RE.search(text):
+        return POST_JOIN_CHAT_MESSAGE
+    return None
+
+
+def _build_system_prompt(campaign: Campaign | None, onboarding_complete: bool = False) -> str:
     if campaign and campaign.whatsapp_group_id:
         group_line = (
             f"Grupo ativo: sim, groupId=`{campaign.whatsapp_group_id}`, campanha `{campaign.name}`."
@@ -303,7 +345,8 @@ def _build_system_prompt(campaign: Campaign | None) -> str:
             "Grupo ativo: ainda nao — use group-create com groupName=`Tech News IA & MCP` "
             "e phones=[telefone do visitante], autoInvite=true."
         )
-    return f"""Voce e a assistente virtual do Tech News, demo do desafio MCP Z-API (ao vivo).
+    return f"""Voce e a assistente virtual do Tech News, demo ao vivo do Desafio MCP Z-API 2026.
+Stack desta demo: conversa conduzida por OpenAI; acoes no WhatsApp executadas pelo Server MCP oficial da Z-API.
 
 Contexto: informacao sobre IA, MCP e comunicacao inteligente existe demais, tempo pra acompanhar
 tudo e que falta. O Tech News leva as principais novidades sobre isso direto pro WhatsApp da pessoa.
@@ -335,7 +378,8 @@ Regras:
 - Ao usar uma tool, diga na resposta final o que fez (ex.: "Enviei convite no WhatsApp").
 - Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
 - Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
-- Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos."""
+- Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos.
+{"- Onboarding ja concluido: o visitante entrou no grupo. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
 
 
 def _tool_result_text(mcp_result: Any) -> str:
@@ -362,8 +406,14 @@ async def run_chat_turn(
         )
         return ChatTurnResult(reply=auto_reply, tools_used=auto_tools, consent_status=consent_status)
 
+    onboarding_complete = await has_accepted_chat_consent(session, browser_session_id)
+    if onboarding_complete:
+        quick = _post_onboarding_quick_reply(user_message)
+        if quick:
+            return ChatTurnResult(reply=quick, tools_used=[])
+
     messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": _build_system_prompt(campaign)},
+        {"role": "system", "content": _build_system_prompt(campaign, onboarding_complete)},
     ]
     for item in history[-20:]:
         role = item.get("role")

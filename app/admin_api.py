@@ -20,12 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.campaign_defaults import (
-    DEMO_GROUP_MESSAGE,
     INVITATION_MESSAGE,
     LANDING_DESCRIPTION,
     TRIGGER_KEYWORD,
     WELCOME_MESSAGE,
 )
+from app.news_content import DEFAULT_GROUP_NEWS
 from app.db import get_session
 from app.models import Campaign, Contact, MembershipStatus
 
@@ -106,7 +106,7 @@ async def send_content(campaign_id: int, body: ContentCreate, session: AsyncSess
     if campaign is None or campaign.whatsapp_group_id is None:
         raise HTTPException(status_code=404, detail="Campanha ou grupo nao encontrado")
 
-    message = body.text or DEMO_GROUP_MESSAGE
+    message = body.text or DEFAULT_GROUP_NEWS.caption
     result = await mcp_client.call_tool("send-text", {"phone": campaign.whatsapp_group_id, "message": message})
 
     return {"status": "sent", "mcp_result": result}

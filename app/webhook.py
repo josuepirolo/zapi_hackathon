@@ -54,7 +54,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
-from app.ai import generate_promo_image_base64, interpret_confirmation, interpret_intent
+from app.ai import interpret_confirmation, interpret_intent
+from app.group_news import send_group_news
 from app.campaign_defaults import ALREADY_MEMBER_MESSAGE
 from app.config import WEBHOOK_SHARED_SECRET
 from app.db import async_session
@@ -175,39 +176,11 @@ async def _ensure_group_membership(session: AsyncSession, contact: Contact, camp
 
 
 async def _send_group_welcome(campaign: Campaign) -> None:
-    """Boas-vindas no grupo ao aceitar: imagem gerada por IA em memoria
-    (base64) enviada via `send-image` do MCP — nunca hospedada em URL
-    publica. Legenda = `welcome_message` da campanha."""
+    """Fluxo legado (#desafiozapi): novidade no grupo compartilhado da campanha."""
     if not campaign.whatsapp_group_id:
-        logger.warning("Campanha %s sem whatsapp_group_id - boas-vindas ao grupo ignorada.", campaign.id)
+        logger.warning("Campanha %s sem whatsapp_group_id - novidade no grupo ignorada.", campaign.id)
         return
-    image_b64 = await generate_promo_image_base64()
-    if image_b64 is None:
-        logger.warning("Falha ao gerar imagem de boas-vindas - fallback send-text no grupo.")
-        try:
-            await mcp_client.call_tool(
-                "send-text", {"phone": campaign.whatsapp_group_id, "message": campaign.welcome_message}
-            )
-        except Exception:
-            logger.exception("Falha no fallback de boas-vindas via send-text no grupo %s", campaign.whatsapp_group_id)
-        return
-    try:
-        await mcp_client.call_tool(
-            "send-image",
-            {
-                "phone": campaign.whatsapp_group_id,
-                "image": image_b64,
-                "caption": campaign.welcome_message,
-            },
-        )
-    except Exception:
-        logger.exception("Falha ao enviar imagem de boas-vindas via MCP no grupo %s", campaign.whatsapp_group_id)
-        try:
-            await mcp_client.call_tool(
-                "send-text", {"phone": campaign.whatsapp_group_id, "message": campaign.welcome_message}
-            )
-        except Exception:
-            logger.exception("Falha no fallback send-text de boas-vindas no grupo %s", campaign.whatsapp_group_id)
+    await send_group_news(campaign.whatsapp_group_id)
 
 
 async def _retry_stuck_acceptance(session: AsyncSession, contact: Contact, campaign: Campaign) -> None:

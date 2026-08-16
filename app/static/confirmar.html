@@ -20,6 +20,11 @@
   h1 { margin: 0 0 12px; font-size: 1.4rem; }
   p { color: var(--muted); line-height: 1.5; margin: 0 0 24px; }
   #turnstile-box { display: flex; justify-content: center; margin-bottom: 16px; min-height: 65px; }
+  .turnstile-section { margin-bottom: 8px; }
+  .turnstile-hint {
+    font-size: 0.85rem; color: var(--muted); margin: 0 0 12px; line-height: 1.4;
+  }
+  .turnstile-section.hidden { display: none; }
   button {
     width: 100%; border: none; background: var(--accent); color: #fff; font-weight: 700;
     font-size: 1rem; padding: 14px 16px; border-radius: 12px; cursor: pointer;
@@ -35,7 +40,10 @@
 <div class="card">
   <h1 id="title">Confirmar entrada</h1>
   <p id="subtitle">Toque abaixo para confirmar que deseja entrar no grupo Tech News IA & MCP no WhatsApp.</p>
-  <div id="turnstile-box"></div>
+  <div class="turnstile-section hidden" id="turnstile-section">
+    <p class="turnstile-hint" id="turnstile-hint">Complete a verificação de segurança abaixo antes de confirmar.</p>
+    <div id="turnstile-box"></div>
+  </div>
   <button type="button" id="confirm-btn">Confirmar minha entrada</button>
   <div class="result" id="result"></div>
 </div>
@@ -43,21 +51,53 @@
 const token = location.pathname.split("/").filter(Boolean).pop() || "";
 const btn = document.getElementById("confirm-btn");
 const resultEl = document.getElementById("result");
+const turnstileSection = document.getElementById("turnstile-section");
 let turnstileEnabled = false;
+let turnstileSiteKey = null;
 let turnstileWidgetId = null;
+let turnstileTokenReady = false;
+
+function startTurnstileWidget() {
+  if (!turnstileEnabled || !turnstileSiteKey) {
+    turnstileSection.classList.add("hidden");
+    btn.disabled = false;
+    return;
+  }
+  turnstileSection.classList.remove("hidden");
+  btn.disabled = true;
+  const run = () => {
+    if (turnstileWidgetId !== null) return;
+    turnstileWidgetId = turnstile.render("#turnstile-box", {
+      sitekey: turnstileSiteKey,
+      theme: "light",
+      size: "normal",
+      callback: () => {
+        turnstileTokenReady = true;
+        btn.disabled = false;
+        resultEl.textContent = "";
+      },
+      "expired-callback": () => {
+        turnstileTokenReady = false;
+        btn.disabled = true;
+        if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
+          turnstile.reset(turnstileWidgetId);
+        }
+      },
+    });
+  };
+  if (typeof turnstile !== "undefined") run();
+  else turnstile.ready(run);
+}
 
 async function setupTurnstile() {
   try {
     const cfg = await (await fetch("/api/chat/config")).json();
     turnstileEnabled = !!cfg.turnstile_enabled;
-    if (turnstileEnabled && cfg.turnstile_site_key && typeof turnstile !== "undefined") {
-      turnstileWidgetId = turnstile.render("#turnstile-box", {
-        sitekey: cfg.turnstile_site_key,
-        theme: "light",
-      });
-    }
+    turnstileSiteKey = cfg.turnstile_site_key || null;
+    startTurnstileWidget();
   } catch (e) {
     turnstileEnabled = false;
+    btn.disabled = false;
   }
 }
 
@@ -68,13 +108,15 @@ async function accept() {
   let turnstileToken = null;
   if (turnstileEnabled) {
     if (turnstileWidgetId === null || typeof turnstile === "undefined") {
-      resultEl.innerHTML = `<span class="err">Verificacao anti-bot ainda carregando. Aguarde e tente de novo.</span>`;
+      startTurnstileWidget();
+      resultEl.innerHTML = `<span class="err">Aguarde o widget Cloudflare carregar abaixo e tente de novo.</span>`;
       btn.disabled = false;
       return;
     }
     turnstileToken = turnstile.getResponse(turnstileWidgetId);
     if (!turnstileToken) {
-      resultEl.innerHTML = `<span class="err">Complete a verificacao anti-bot acima.</span>`;
+      turnstileSection.classList.remove("hidden");
+      resultEl.innerHTML = `<span class="err">Complete a verificação Cloudflare acima antes de confirmar.</span>`;
       btn.disabled = false;
       return;
     }
@@ -92,11 +134,15 @@ async function accept() {
       document.getElementById("title").textContent = "Tudo certo!";
       document.getElementById("subtitle").textContent = "Pode fechar esta pagina e voltar ao chat no site.";
       btn.style.display = "none";
-      document.getElementById("turnstile-box").style.display = "none";
+      turnstileSection.classList.add("hidden");
     } else {
-      resultEl.innerHTML = `<span class="err">${data.message}</span>`;
+      resultEl.innerHTML = `<span class="err">${data.message || data.detail || "Nao foi possivel confirmar."}</span>`;
       btn.disabled = false;
-      if (turnstileEnabled && turnstileWidgetId !== null) turnstile.reset(turnstileWidgetId);
+      if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
+        turnstile.reset(turnstileWidgetId);
+        turnstileTokenReady = false;
+        btn.disabled = true;
+      }
     }
   } catch (e) {
     resultEl.innerHTML = `<span class="err">Erro de conexao. Tente novamente.</span>`;

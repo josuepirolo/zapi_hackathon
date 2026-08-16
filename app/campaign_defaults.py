@@ -11,6 +11,8 @@ from __future__ import annotations
 
 TRIGGER_KEYWORD = "#desafiozapi"
 
+GROUP_NAME_PREFIX = "Tech News IA & MCP"
+
 LANDING_DESCRIPTION = (
     "Novidades sobre IA, MCP e o futuro da comunicação inteligente, direto no seu WhatsApp — entre com um clique."
 )
@@ -21,21 +23,32 @@ INVITATION_MESSAGE = (
 )
 
 WELCOME_MESSAGE = (
-    "Bem-vindo(a) ao Tech News! Em breve vamos trazer as principais novidades sobre IA, MCP e comunicacao inteligente por aqui."
+    "Bem-vindo(a) ao seu grupo Tech News! Seu espaco exclusivo foi criado — "
+    "em instantes a primeira novidade do dia aparece por la."
 )
 
 ALREADY_MEMBER_MESSAGE = (
-    "Voce ja faz parte do nosso grupo de novidades Tech! Que bom ter voce conosco. "
-    "Fique de olho nas proximas novidades sobre IA e MCP."
+    "Voce ja faz parte do nosso grupo de novidades Tech! Acabei de publicar a novidade de hoje la — "
+    "confira no WhatsApp."
 )
 
 ADMIN_ALREADY_MEMBER_MESSAGE = (
     "Esse numero ja e administrador do nosso grupo de novidades Tech! "
-    "Voce ja tem acesso total por la."
+    "A novidade de hoje foi publicada no grupo — confira la."
 )
 
-DEMO_GROUP_MESSAGE = "Novidade no ar! Fique de olho nas proximas atualizacoes sobre IA e MCP no grupo."
+DEMO_GROUP_MESSAGE = (
+    "📰 Novidade no ar — Z-API + MCP Server!\n\n"
+    "*A API mais estavel e intuitiva agora tem servidor MCP para facilitar* "
+    "a comunicacao entre sua LLM preferida e seu WhatsApp.\n\n"
+    "Saiba mais: https://developer.z-api.io/mcp/introduction"
+)
 
 JOINED_MESSAGE = (
     "Tudo pronto! Voce ja esta no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀"
+)
+
+POST_JOIN_CHAT_MESSAGE = (
+    "Abra seu WhatsApp agora — a novidade ja esta la. 📱 "
+    "Depois disso, pode me perguntar sobre IA, MCP ou esta demo."
 )
