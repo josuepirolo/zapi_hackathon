@@ -51,7 +51,13 @@ DEMO_GROUP_MESSAGE = (
 )
 
 JOINED_MESSAGE = (
-    "Tudo pronto! Voce ja esta no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀"
+    "Tudo pronto! Enviei o link do seu grupo Tech News no WhatsApp — toque nele para abrir direto. "
+    "A novidade do dia tambem ja foi publicada la. 🚀"
+)
+
+GROUP_ACCESS_LINK_DM = (
+    "Acesse seu grupo *{group_name}* por aqui:\n{link}\n\n"
+    "Toque no link para abrir direto no WhatsApp."
 )
 
 POST_JOIN_CHAT_MESSAGE = (
