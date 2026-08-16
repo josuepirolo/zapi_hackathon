@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.phone_mask import mask_phone_digits
-from app.campaign_defaults import ADMIN_ALREADY_MEMBER_MESSAGE, ALREADY_MEMBER_MESSAGE, WELCOME_MESSAGE
+from app.campaign_defaults import (
+    ADMIN_ALREADY_MEMBER_MESSAGE,
+    ALREADY_MEMBER_MESSAGE,
+    JOINED_MESSAGE,
+    WELCOME_MESSAGE,
+)
 from app.config import CHAT_HUMAN_VERIFY_TTL_HOURS, CONSENT_LINK_TTL_MINUTES, PUBLIC_BASE_URL
 from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
 from app.webhook import _lock_campaign, _send_group_welcome
@@ -142,19 +147,24 @@ async def start_tracked_consent(
     session: AsyncSession,
     browser_session_id: str,
     phone: str,
+    name: str | None = None,
 ) -> tuple[bool, str, list[str], str]:
-    """Cria registro, envia link no WhatsApp. Retorna (ok, reply, tools, consent_status)."""
+    """Cria registro, envia link no WhatsApp. Retorna (ok, reply, tools, consent_status).
+
+    Se o telefone ja for membro/admin do grupo, isso NUNCA e revelado aqui
+    nem na mensagem do WhatsApp (ver `existing_member_kind` em
+    `app.models.ChatConsentSession`) - por seguranca, so descobrimos e
+    informamos depois que o link foi clicado (`accept_consent_by_token`).
+    Sem essa protecao, qualquer um poderia digitar o numero de outra pessoa
+    no chat publico e descobrir se aquele numero ja esta no grupo/e admin
+    sem provar que e o dono dele."""
     campaign = await _latest_campaign(session)
 
     existing = await _find_existing_membership(campaign, phone) if campaign else None
+    existing_kind: str | None = None
     if existing is not None:
-        is_admin = bool(existing.get("isAdmin") or existing.get("isSuperAdmin"))
-        message = ADMIN_ALREADY_MEMBER_MESSAGE if is_admin else ALREADY_MEMBER_MESSAGE
-        try:
-            await mcp_client.call_tool("send-text", {"phone": phone, "message": message})
-        except Exception:
-            logger.exception("Falha ao avisar %s que ja esta no grupo", phone)
-        return True, message, ["group-metadata", "send-text"], "accepted"
+        existing_kind = "admin" if bool(existing.get("isAdmin") or existing.get("isSuperAdmin")) else "member"
+    tools_used = ["group-metadata"] if campaign and campaign.whatsapp_group_id else []
 
     token = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
@@ -165,8 +175,10 @@ async def start_tracked_consent(
         browser_session_id=browser_session_id,
         token=token,
         phone=phone,
+        name=name,
         campaign_id=campaign.id if campaign else None,
         status=ChatLinkStatus.PENDING,
+        existing_member_kind=existing_kind,
         created_at=now,
     )
     session.add(record)
@@ -174,13 +186,17 @@ async def start_tracked_consent(
 
     link = confirm_url(token)
     campaign_name = campaign.name if campaign else "Tech News IA & MCP"
+    greeting = f"Ola, {name}!" if name else "Ola!"
     message = (
-        f"Ola! Voce pediu para entrar no grupo *{campaign_name}* pelo site.\n\n"
-        f"Toque no link para confirmar sua entrada:\n{link}\n\n"
+        f"{greeting} Voce pediu para confirmar seu WhatsApp no *{campaign_name}* pelo site.\n\n"
+        f"Toque no link para confirmar seu numero:\n{link}\n\n"
         f"O link expira em {CONSENT_LINK_TTL_MINUTES} minutos."
     )
 
-    logger.info("Chat link send-text phone=%s token=%s session=%s", phone, token, browser_session_id)
+    logger.info(
+        "Chat link send-text phone=%s token=%s session=%s existing=%s",
+        phone, token, browser_session_id, existing_kind,
+    )
     try:
         result = await mcp_client.call_tool("send-text", {"phone": phone, "message": message})
     except Exception:
@@ -190,7 +206,7 @@ async def start_tracked_consent(
         return (
             False,
             "Nao consegui enviar o link no WhatsApp. Verifique o numero com DDI (ex.: 5544***9999).",
-            [],
+            tools_used,
             "none",
         )
 
@@ -201,17 +217,18 @@ async def start_tracked_consent(
         return (
             False,
             "WhatsApp nao aceitou esse numero. Use DDI+DDD+numero, so digitos.",
-            ["send-text"],
+            tools_used + ["send-text"],
             "none",
         )
 
+    tools_used = tools_used + ["send-text"]
     masked = mask_phone_digits(phone)
     reply = (
         f"Enviei um link de confirmacao no WhatsApp para {masked}. "
         "Abra a mensagem no celular, toque no link e confirme — "
-        "vou aguardar aqui ate voce aceitar."
+        "vou aguardar aqui ate voce confirmar."
     )
-    return True, reply, ["send-text"], "waiting"
+    return True, reply, tools_used, "waiting"
 
 
 async def get_consent_poll_status(session: AsyncSession, browser_session_id: str) -> dict[str, str | list[str]]:
@@ -236,12 +253,23 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
     payload: dict[str, str | list[str]] = {"status": str(record.status)}
     if record.status == ChatLinkStatus.ACCEPTED:
         payload["tools_used"] = record_tools_for_accept(record)
+        payload["message"] = _accepted_message_for(record)
     return payload
 
 
+def _accepted_message_for(record: ChatConsentSession) -> str:
+    if record.existing_member_kind == "admin":
+        return ADMIN_ALREADY_MEMBER_MESSAGE
+    if record.existing_member_kind == "member":
+        return ALREADY_MEMBER_MESSAGE
+    return JOINED_MESSAGE
+
+
 def record_tools_for_accept(record: ChatConsentSession) -> list[str]:
+    if record.existing_member_kind:
+        return ["group-metadata", "send-text"]
     # Heuristica simples pro chip da UI — detalhe fino nao e critico pro demo.
-    return ["send-text", "group-add-participant"]
+    return ["send-text", "group-add-participant", "send-image"]
 
 
 async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bool, str]:
@@ -257,6 +285,22 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     if record.status == ChatLinkStatus.ACCEPTED:
         return True, "Entrada ja confirmada! Pode voltar ao chat no site."
 
+    if record.existing_member_kind:
+        # So aqui, com a posse do numero provada pelo clique no link, e
+        # que informamos que o contato ja fazia parte do grupo/e admin -
+        # ver `start_tracked_consent` pro motivo de nao revelar isso antes.
+        record.status = ChatLinkStatus.ACCEPTED
+        record.accepted_at = now
+        await session.commit()
+        logger.info(
+            "Chat link confirmado (contato ja existente, kind=%s) token=%s phone=%s session=%s",
+            record.existing_member_kind, token, record.phone, record.browser_session_id,
+        )
+        message = (
+            ADMIN_ALREADY_MEMBER_MESSAGE if record.existing_member_kind == "admin" else ALREADY_MEMBER_MESSAGE
+        )
+        return True, message
+
     campaign: Campaign | None = None
     if record.campaign_id:
         campaign = await session.get(Campaign, record.campaign_id)
@@ -266,22 +310,37 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     if campaign is None:
         return False, "Nenhuma campanha ativa no momento."
 
+    # Status intermediarios comitados aqui pra alimentar o polling do chat
+    # no browser de origem (aba/aparelho diferente de onde o link foi
+    # aberto) - ver `get_consent_poll_status`, que devolve `str(record.status)`
+    # cru sem mapear nada, entao qualquer valor novo do enum ja passa direto.
+    record.status = (
+        ChatLinkStatus.ADDING_PARTICIPANT if campaign.whatsapp_group_id else ChatLinkStatus.CREATING_GROUP
+    )
+    await session.commit()
+
     if not await ensure_phone_in_group(session, campaign, record.phone):
+        record.status = ChatLinkStatus.PENDING
+        await session.commit()
         return False, "Nao foi possivel adicionar voce ao grupo agora. Tente novamente pelo chat."
 
-    record.status = ChatLinkStatus.ACCEPTED
-    record.accepted_at = now
+    record.status = ChatLinkStatus.PREPARING_CONTENT
     await session.commit()
     await session.refresh(campaign)
 
     await _send_group_welcome(campaign)
+    welcome_text = f"Oi, {record.name}! {WELCOME_MESSAGE}" if record.name else WELCOME_MESSAGE
     try:
         await mcp_client.call_tool(
             "send-text",
-            {"phone": record.phone, "message": WELCOME_MESSAGE},
+            {"phone": record.phone, "message": welcome_text},
         )
     except Exception:
         logger.exception("Chat link: falha send-text pos-aceite para %s", record.phone)
+
+    record.status = ChatLinkStatus.ACCEPTED
+    record.accepted_at = now
+    await session.commit()
 
     logger.info("Chat link aceito token=%s phone=%s session=%s", token, record.phone, record.browser_session_id)
     return True, "Pronto! Voce entrou no grupo Tech News. Pode voltar ao chat no site."

@@ -392,11 +392,7 @@ function unlockChatAfterHuman() {
   hideTurnstileSection();
   if (!welcomedAfterVerify) {
     welcomedAfterVerify = true;
-    addAssistant(
-      "Agora sim! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
-      "(ex.: 5544***9999). Envio um link de confirmação no celular e confirmo aqui quando você tocar nele. Quer participar?",
-      []
-    );
+    showWelcomeAndPrivacy("Agora sim! Sou a assistente do Tech News (novidades de IA e MCP).");
   }
   inputEl.focus();
 }
@@ -480,25 +476,41 @@ function stopConsentPoll() {
   }
 }
 
-function setWaiting(on) {
+const WAITING_LABELS = {
+  pending: "Aguardando você tocar no link de confirmação no WhatsApp…",
+  creating_group: "Criando o grupo no WhatsApp…",
+  adding_participant: "Adicionando você ao grupo…",
+  preparing_content: "Preparando a primeira notícia pra você…",
+};
+
+function setWaiting(text) {
   let el = document.getElementById("waiting");
-  if (on && !el) {
-    el = document.createElement("div");
-    el.id = "waiting";
-    el.className = "typing waiting";
-    el.textContent = "Aguardando você tocar no link de confirmação no WhatsApp…";
-    messagesEl.appendChild(el);
+  if (text) {
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "waiting";
+      el.className = "typing waiting";
+      messagesEl.appendChild(el);
+    }
+    el.textContent = text;
     messagesEl.scrollTop = messagesEl.scrollHeight;
-  } else if (!on && el) {
+  } else if (el) {
     el.remove();
   }
 }
 
 function startConsentPoll() {
   stopConsentPoll();
-  setWaiting(true);
+  setWaiting(WAITING_LABELS.pending);
   pollConsent();
   pollTimer = setInterval(pollConsent, 2000);
+}
+
+function reenableAfterConsent() {
+  inputEl.disabled = false;
+  if (humanVerified) setSendEnabled(true);
+  else setSendEnabled(false);
+  inputEl.focus();
 }
 
 async function pollConsent() {
@@ -507,18 +519,39 @@ async function pollConsent() {
     const data = await resp.json();
     if (data.status === "accepted") {
       stopConsentPoll();
-      setWaiting(false);
-      const msg = "Perfeito! Confirmamos seu clique no link. Bem-vindo(a) ao Tech News!";
-      addAssistant(msg, data.tools_used || ["send-text", "group-add-participant"]);
+      setWaiting(null);
+      const msg = data.message || "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
+      addAssistant(msg, data.tools_used || ["send-text", "group-add-participant", "send-image"]);
       history.push({ role: "assistant", content: msg });
+      reenableAfterConsent();
     } else if (data.status === "expired") {
       stopConsentPoll();
-      setWaiting(false);
+      setWaiting(null);
       addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
+      reenableAfterConsent();
+    } else if (WAITING_LABELS[data.status]) {
+      setWaiting(WAITING_LABELS[data.status]);
     }
   } catch (err) {
     /* mantém polling */
   }
+}
+
+function showWelcomeAndPrivacy(intro) {
+  const privacy =
+    "🔒 Sua privacidade importa. Vamos usar seu WhatsApp só pra verificar seu acesso e realizar esta experiência de " +
+    "demonstração — seus dados não são compartilhados e você pode encerrar sua participação quando quiser.";
+  const askName = "Antes de começarmos: qual é o seu primeiro nome?";
+  addAssistant(intro, []);
+  addAssistant(privacy, []);
+  addAssistant(askName, []);
+  // Precisa entrar no `history` (nao so aparecer na tela) pra chegar de
+  // volta pro backend no proximo /api/chat - e o que permite ao agente
+  // (ver `_extract_name_from_history` em chat_agent.py) identificar a
+  // resposta do visitante como sendo o nome dele.
+  history.push({ role: "assistant", content: intro });
+  history.push({ role: "assistant", content: privacy });
+  history.push({ role: "assistant", content: askName });
 }
 
 function openChat() {
@@ -529,11 +562,7 @@ function openChat() {
     if (!opened) {
       opened = true;
       if (humanVerified) {
-        addAssistant(
-          "Olá! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
-          "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
-          []
-        );
+        showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       } else if (turnstileEnabled) {
         addAssistant(
           "Olá! Pode ir escrevendo — a verificação Cloudflare roda ali embaixo. " +
@@ -541,11 +570,7 @@ function openChat() {
           []
         );
       } else {
-        addAssistant(
-          "Olá! Sou a assistente do Tech News (novidades de IA e MCP). Se quiser entrar, me passa seu WhatsApp com DDI " +
-          "(ex.: 5544***9999). Envio um link de confirmação no celular — ao tocar nele, confirmo aqui no chat. Quer participar?",
-          []
-        );
+        showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       }
     }
     if (humanVerified) inputEl.focus();
@@ -650,10 +675,12 @@ async function send() {
     addAssistant("Não foi possível conectar. Verifique sua rede e tente de novo.", []);
   } finally {
     setTyping(false);
-    inputEl.disabled = false;
-    if (humanVerified) setSendEnabled(true);
-    else setSendEnabled(false);
-    inputEl.focus();
+    if (!pollTimer) {
+      inputEl.disabled = false;
+      if (humanVerified) setSendEnabled(true);
+      else setSendEnabled(false);
+      inputEl.focus();
+    }
   }
 }
 
