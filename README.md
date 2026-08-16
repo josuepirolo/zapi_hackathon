@@ -31,9 +31,10 @@ Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
 
 1. Abrir `https://desafiozapi.py.tec.br/promocoes`
 2. Informar WhatsApp com DDI e confirmar o número
-3. Receber **link trackeado** no WhatsApp (`send-text` via MCP)
+3. Receber **link de confirmação** no WhatsApp (`send-text` via MCP)
 4. Tocar no link → `/confirmar/{token}` → entra no grupo
 5. O chat faz **polling** (`GET /api/chat/consent/{session_id}`) até detectar aceite
 
 Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie não é obrigatório.
 Estado do link: SQLite (`chat_consent_sessions`), sem Redis.
+Telefones exibidos no chat são mascarados (`5544***9999`); o backend usa o número real só para MCP.
