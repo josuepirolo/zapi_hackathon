@@ -62,7 +62,7 @@ GROUP_ACCESS_LINK_DM = (
 
 POST_JOIN_CHAT_MESSAGE = (
     "Abra seu WhatsApp agora — a novidade sobre Z-API + MCP ja esta no seu grupo. "
-    "Esta demo nao responde perguntas no chat; para sair, diga \"quero sair do grupo\"."
+    "Aqui no site a demo so conduz entrada e saida; o conteudo completo esta no WhatsApp."
 )
 
 DEMO_SCOPE_ONLY_MESSAGE = (
