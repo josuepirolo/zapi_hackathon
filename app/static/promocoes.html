@@ -507,6 +507,8 @@ const WAITING_LABELS = {
   creating_group: "Criando o grupo no WhatsApp…",
   adding_participant: "Adicionando você ao grupo…",
   preparing_content: "Preparando a primeira notícia pra você…",
+  remove_pending: "Aguardando você confirmar a saída no WhatsApp…",
+  removing: "Removendo você do grupo…",
 };
 
 const CONSENT_WAITING_STATUSES = new Set(Object.keys(WAITING_LABELS));
@@ -531,11 +533,25 @@ function startConsentPoll(initialStatus) {
   stopConsentPoll();
   markConsentWaiting();
   const status = CONSENT_WAITING_STATUSES.has(initialStatus) ? initialStatus : "pending";
-  setWaiting(WAITING_LABELS[status]);
+  setWaiting(WAITING_LABELS[status] || WAITING_LABELS.pending);
   inputEl.disabled = true;
   setSendEnabled(false);
   pollConsent();
   pollTimer = setInterval(pollConsent, 2000);
+}
+
+function handleLeaveRemoved(data) {
+  stopConsentPoll();
+  clearConsentWaiting();
+  sessionStorage.removeItem("delega_consent_done");
+  consentAcceptedHintShown = false;
+  setWaiting(null);
+  const msg =
+    data.message ||
+    "Pronto — você foi removido do grupo. A confirmação foi enviada no seu WhatsApp.";
+  addAssistant(msg, data.tools_used || []);
+  history.push({ role: "assistant", content: msg });
+  reenableAfterConsent();
 }
 
 function handleConsentAccepted(data) {
@@ -568,7 +584,9 @@ async function pollConsent() {
   try {
     const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
     const data = await resp.json();
-    if (data.status === "accepted") {
+    if (data.status === "removed") {
+      handleLeaveRemoved(data);
+    } else if (data.status === "accepted") {
       handleConsentAccepted(data);
     } else if (data.status === "expired") {
       stopConsentPoll();
@@ -577,7 +595,7 @@ async function pollConsent() {
       addAssistant("O link expirou. Quer um novo convite? Confirme seu número de WhatsApp novamente.", []);
       reenableAfterConsent();
     } else if (CONSENT_WAITING_STATUSES.has(data.status)) {
-      setWaiting(WAITING_LABELS[data.status]);
+      setWaiting(WAITING_LABELS[data.status] || WAITING_LABELS.pending);
     }
   } catch (err) {
     /* mantém polling */
@@ -595,6 +613,8 @@ async function resumeConsentIfNeeded() {
     const data = await resp.json();
     if (CONSENT_WAITING_STATUSES.has(data.status)) {
       startConsentPoll(data.status);
+    } else if (data.status === "removed" && !consentAcceptedHintShown) {
+      handleLeaveRemoved(data);
     } else if (data.status === "accepted" && !consentAcceptedHintShown && !isConsentDoneMarked()) {
       handleConsentAccepted(data);
     } else if (data.status === "expired" || data.status === "none") {
@@ -637,8 +657,7 @@ function openChat() {
         showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       } else if (turnstileEnabled) {
         addAssistant(
-          "Olá! Pode ir escrevendo — a verificação Cloudflare roda ali embaixo. " +
-          "Libero o enviar assim que o botãozinho terminar.",
+          "Olá! Confirme a verificação de segurança abaixo — libero o chat assim que terminar.",
           []
         );
       } else {
@@ -704,7 +723,6 @@ async function send() {
 
   await loadChatConfig();
   if (turnstileEnabled && !humanVerified) {
-    addAssistant("Aguarde o Cloudflare terminar a verificação ali embaixo — o Enviar libera em seguida.", []);
     return;
   }
 

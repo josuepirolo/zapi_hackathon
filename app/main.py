@@ -75,3 +75,8 @@ async def promocoes() -> FileResponse:
 @app.get("/confirmar/{token}")
 async def confirmar_link(token: str) -> FileResponse:
     return FileResponse(STATIC_DIR / "confirmar.html")
+
+
+@app.get("/sair/{token}")
+async def confirmar_saida_link(token: str) -> FileResponse:
+    return FileResponse(STATIC_DIR / "confirmar_saida.html")

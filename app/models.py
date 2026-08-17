@@ -81,6 +81,14 @@ class ChatLinkStatus(StrEnum):
     PREPARING_CONTENT = "preparing_content"
     ACCEPTED = "accepted"
     EXPIRED = "expired"
+    REMOVE_PENDING = "remove_pending"
+    REMOVING = "removing"
+    REMOVED = "removed"
+
+
+class ChatSessionFlow(StrEnum):
+    JOIN = "join"
+    LEAVE = "leave"
 
 
 class ChatConsentSession(Base):
@@ -94,6 +102,7 @@ class ChatConsentSession(Base):
     phone: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
+    flow: Mapped[str] = mapped_column(String, default=ChatSessionFlow.JOIN)
     status: Mapped[ChatLinkStatus] = mapped_column(String, default=ChatLinkStatus.PENDING)
     # "admin"/"member" se o telefone ja estava no grupo quando o link foi
     # gerado; None = fluxo normal de entrada. So descoberto/informado DEPOIS

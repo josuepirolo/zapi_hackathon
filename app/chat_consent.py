@@ -26,11 +26,11 @@ from app.campaign_defaults import (
     GROUP_NAME_PREFIX,
     INSTANCE_PHONE_BLOCKED_MESSAGE,
     JOINED_MESSAGE,
-    LEAVE_GROUP_ASK,
+    LEAVE_ALREADY_GONE,
     LEAVE_GROUP_FAILED,
-    LEAVE_GROUP_STAY,
     LEAVE_GROUP_SUCCESS,
-    LEAVE_GROUP_UNCLEAR,
+    LEAVE_LINK_CHAT_REPLY,
+    LEAVE_LINK_DM,
     WELCOME_MESSAGE,
 )
 from app.config import (
@@ -40,7 +40,7 @@ from app.config import (
     ZAPI_INSTANCE_PHONE,
 )
 from app.group_news import send_group_news
-from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus
+from app.models import Campaign, ChatConsentSession, ChatHumanVerification, ChatLinkStatus, ChatSessionFlow
 from app.webhook import _lock_campaign
 
 logger = logging.getLogger("delega.chat_consent")
@@ -52,12 +52,6 @@ _LEAVE_INTENT_RE = re.compile(
     r"\b(sair do grupo|quero sair|encerrar (minha )?participa|leave the group|remover do grupo)\b",
     re.IGNORECASE,
 )
-_LEAVE_ASK_RE = re.compile(r"\b(tem certeza|encerrar sua participacao|responda sim ou nao)\b", re.IGNORECASE)
-_LEAVE_YES_RE = re.compile(
-    r"\b(sim|confirmo|confirmar|pode remover|pode sair|quero sair mesmo|yes)\b",
-    re.IGNORECASE,
-)
-_LEAVE_NO_RE = re.compile(r"\b(nao|não|negativo|cancela|continuo|fico|no)\b", re.IGNORECASE)
 
 
 def _utc_aware(dt: datetime) -> datetime:
@@ -79,12 +73,18 @@ def confirm_url(token: str) -> str:
     return f"{PUBLIC_BASE_URL}/confirmar/{token}"
 
 
+def leave_url(token: str) -> str:
+    return f"{PUBLIC_BASE_URL}/sair/{token}"
+
+
 def _is_expired(record: ChatConsentSession, now: datetime) -> bool:
+    if record.status not in (ChatLinkStatus.PENDING, ChatLinkStatus.REMOVE_PENDING):
+        return False
     return _utc_aware(record.created_at) + _CONSENT_TTL < now
 
 
 async def _expire_if_needed(session: AsyncSession, record: ChatConsentSession, now: datetime) -> ChatConsentSession:
-    if record.status == ChatLinkStatus.PENDING and _is_expired(record, now):
+    if record.status in (ChatLinkStatus.PENDING, ChatLinkStatus.REMOVE_PENDING) and _is_expired(record, now):
         record.status = ChatLinkStatus.EXPIRED
         await session.commit()
     return record
@@ -101,7 +101,9 @@ async def _expire_other_pending(
     result = await session.execute(
         select(ChatConsentSession).where(
             ChatConsentSession.browser_session_id == browser_session_id,
-            ChatConsentSession.status == ChatLinkStatus.PENDING,
+            ChatConsentSession.status.in_(
+                (ChatLinkStatus.PENDING, ChatLinkStatus.REMOVE_PENDING)
+            ),
         )
     )
     for row in result.scalars().all():
@@ -129,6 +131,7 @@ async def _find_prior_personal_group(session: AsyncSession, phone: str) -> ChatC
         select(ChatConsentSession)
         .where(
             ChatConsentSession.status == ChatLinkStatus.ACCEPTED,
+            ChatConsentSession.flow == ChatSessionFlow.JOIN,
             ChatConsentSession.whatsapp_group_id.isnot(None),
         )
         .order_by(ChatConsentSession.id.desc())
@@ -327,6 +330,7 @@ async def get_accepted_consent_session(
         select(ChatConsentSession)
         .where(
             ChatConsentSession.browser_session_id == browser_session_id,
+            ChatConsentSession.flow == ChatSessionFlow.JOIN,
             ChatConsentSession.status == ChatLinkStatus.ACCEPTED,
             ChatConsentSession.whatsapp_group_id.isnot(None),
         )
@@ -336,15 +340,129 @@ async def get_accepted_consent_session(
     return result.scalar_one_or_none()
 
 
-def _latest_assistant_text(history: list[dict[str, str]]) -> str:
-    for item in reversed(history[-8:]):
-        if item.get("role") == "assistant":
-            return (item.get("content") or "").strip()
-    return ""
+async def try_leave_group_from_chat(
+    session: AsyncSession,
+    browser_session_id: str,
+    user_message: str,
+) -> tuple[bool, str, list[str], str] | None:
+    """Inicia saida trackeada via link no WhatsApp (mesmo padrao da entrada)."""
+    if not _LEAVE_INTENT_RE.search(user_message.strip()):
+        return None
+    return await start_tracked_leave(session, browser_session_id)
 
 
-def _assistant_asked_leave_confirmation(history: list[dict[str, str]]) -> bool:
-    return bool(_LEAVE_ASK_RE.search(_latest_assistant_text(history)))
+async def start_tracked_leave(
+    session: AsyncSession,
+    browser_session_id: str,
+) -> tuple[bool, str, list[str], str]:
+    join_record = await get_accepted_consent_session(session, browser_session_id)
+    if join_record is None or not join_record.whatsapp_group_id:
+        return False, "Voce ainda nao entrou em um grupo nesta demo.", [], "none"
+
+    label = join_record.group_name or GROUP_NAME_PREFIX
+
+    try:
+        meta = await mcp_client.call_tool("group-metadata", {"groupId": join_record.whatsapp_group_id})
+        if mcp_client.find_participant(meta, join_record.phone) is None:
+            return False, LEAVE_ALREADY_GONE.format(group_name=label), [], "none"
+    except Exception:
+        logger.exception("Chat leave: falha group-metadata pre-check %s", join_record.whatsapp_group_id)
+
+    token = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    await _expire_other_pending(session, browser_session_id)
+
+    record = ChatConsentSession(
+        browser_session_id=browser_session_id,
+        token=token,
+        phone=join_record.phone,
+        name=join_record.name,
+        campaign_id=join_record.campaign_id,
+        flow=ChatSessionFlow.LEAVE,
+        status=ChatLinkStatus.REMOVE_PENDING,
+        whatsapp_group_id=join_record.whatsapp_group_id,
+        group_name=join_record.group_name,
+        created_at=now,
+    )
+    session.add(record)
+    await session.commit()
+
+    link = leave_url(token)
+    message = LEAVE_LINK_DM.format(
+        group_name=label,
+        link=link,
+        minutes=CONSENT_LINK_TTL_MINUTES,
+    )
+
+    logger.info(
+        "Chat leave link send-text phone=%s token=%s session=%s grupo=%s",
+        join_record.phone,
+        token,
+        browser_session_id,
+        join_record.whatsapp_group_id,
+    )
+
+    if not await _send_text_dm(join_record.phone, message):
+        record.status = ChatLinkStatus.EXPIRED
+        await session.commit()
+        return (
+            False,
+            "Nao consegui enviar o link de confirmacao de saida no WhatsApp. Tente de novo em instantes.",
+            [],
+            "none",
+        )
+
+    masked = mask_phone_digits(join_record.phone)
+    reply = LEAVE_LINK_CHAT_REPLY.format(masked=masked)
+    return True, reply, ["send-text"], "waiting"
+
+
+async def accept_leave_by_token(session: AsyncSession, token: str) -> tuple[bool, str]:
+    now = datetime.now(timezone.utc)
+    result = await session.execute(select(ChatConsentSession).where(ChatConsentSession.token == token))
+    record = result.scalar_one_or_none()
+    if record is None or record.flow != ChatSessionFlow.LEAVE:
+        return False, "Link invalido ou ja utilizado."
+
+    record = await _expire_if_needed(session, record, now)
+    if record.status == ChatLinkStatus.EXPIRED:
+        return False, "Este link expirou. Volte ao chat e solicite sair do grupo novamente."
+    if record.status == ChatLinkStatus.REMOVED:
+        return True, LEAVE_GROUP_SUCCESS.format(group_name=record.group_name or GROUP_NAME_PREFIX)
+    if record.status != ChatLinkStatus.REMOVE_PENDING:
+        return False, "Este link nao pode mais ser usado."
+
+    if not record.whatsapp_group_id:
+        return False, "Nao encontrei seu grupo. Tente novamente pelo chat."
+
+    label = record.group_name or GROUP_NAME_PREFIX
+    record.status = ChatLinkStatus.REMOVING
+    await session.commit()
+
+    removed = await _remove_from_personal_group(record.whatsapp_group_id, record.phone)
+    tools_used: list[str] = ["group-remove-participant", "group-metadata"]
+
+    if not removed:
+        record.status = ChatLinkStatus.REMOVE_PENDING
+        await session.commit()
+        return False, LEAVE_GROUP_FAILED
+
+    dm = f"Voce foi removido do grupo {label}. Obrigado por participar da demo Tech News!"
+    if await _send_text_dm(record.phone, dm):
+        tools_used.append("send-text")
+
+    record.status = ChatLinkStatus.REMOVED
+    record.accepted_at = now
+    await session.commit()
+
+    logger.info(
+        "Chat leave confirmado token=%s phone=%s grupo=%s session=%s",
+        token,
+        record.phone,
+        record.whatsapp_group_id,
+        record.browser_session_id,
+    )
+    return True, LEAVE_GROUP_SUCCESS.format(group_name=label)
 
 
 async def _send_text_dm(phone: str, message: str) -> bool:
@@ -386,52 +504,6 @@ async def _remove_from_personal_group(group_id: str, phone: str) -> bool:
             logger.exception("Chat: falha group-metadata pos-remove %s", group_id)
             return True
     return False
-
-
-async def try_leave_group_from_chat(
-    session: AsyncSession,
-    browser_session_id: str,
-    history: list[dict[str, str]],
-    user_message: str,
-) -> tuple[str, list[str]] | None:
-    """Fluxo deterministico de saida do grupo pessoal. Retorna (reply, tools) se tratou."""
-    record = await get_accepted_consent_session(session, browser_session_id)
-    if record is None or not record.whatsapp_group_id:
-        return None
-
-    text = user_message.strip()
-    label = record.group_name or GROUP_NAME_PREFIX
-
-    try:
-        meta = await mcp_client.call_tool("group-metadata", {"groupId": record.whatsapp_group_id})
-        still_member = mcp_client.find_participant(meta, record.phone) is not None
-    except Exception:
-        still_member = True
-
-    if not still_member and (_LEAVE_INTENT_RE.search(text) or _assistant_asked_leave_confirmation(history)):
-        return (
-            f"Voce ja nao esta no grupo *{label}*. Para entrar de novo, diga que quer participar e informe seu WhatsApp.",
-            [],
-        )
-
-    if _assistant_asked_leave_confirmation(history):
-        if _LEAVE_YES_RE.search(text):
-            removed = await _remove_from_personal_group(record.whatsapp_group_id, record.phone)
-            if not removed:
-                return LEAVE_GROUP_FAILED, []
-            tools = ["group-remove-participant", "group-metadata"]
-            dm = f"Voce foi removido do grupo {label}. Obrigado por participar da demo Tech News!"
-            if await _send_text_dm(record.phone, dm):
-                tools.append("send-text")
-            return LEAVE_GROUP_SUCCESS.format(group_name=label), tools
-        if _LEAVE_NO_RE.search(text):
-            return LEAVE_GROUP_STAY, []
-        return LEAVE_GROUP_UNCLEAR, []
-
-    if _LEAVE_INTENT_RE.search(text):
-        return LEAVE_GROUP_ASK.format(group_name=label), []
-
-    return None
 
 
 async def _send_welcome_dm(phone: str, record: ChatConsentSession) -> bool:
@@ -590,7 +662,12 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
 
     record = await _expire_if_needed(session, record, now)
     payload: dict[str, str | list[str]] = {"status": str(record.status)}
-    if record.status == ChatLinkStatus.ACCEPTED:
+    if record.flow == ChatSessionFlow.LEAVE and record.status == ChatLinkStatus.REMOVED:
+        payload["tools_used"] = ["group-remove-participant", "group-metadata", "send-text"]
+        payload["message"] = LEAVE_GROUP_SUCCESS.format(
+            group_name=record.group_name or GROUP_NAME_PREFIX
+        )
+    elif record.status == ChatLinkStatus.ACCEPTED:
         payload["tools_used"] = record_tools_for_accept(record)
         payload["message"] = _accepted_message_for(record)
     return payload
@@ -632,6 +709,8 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
     record = result.scalar_one_or_none()
     if record is None:
         return False, "Link invalido ou ja utilizado."
+    if record.flow != ChatSessionFlow.JOIN:
+        return False, "Link invalido para entrada."
 
     record = await _expire_if_needed(session, record, now)
     if record.status == ChatLinkStatus.EXPIRED:
@@ -707,16 +786,20 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
 
 
 async def has_accepted_chat_consent(session: AsyncSession, browser_session_id: str) -> bool:
+    join = await get_accepted_consent_session(session, browser_session_id)
+    if join is None:
+        return False
     result = await session.execute(
-        select(ChatConsentSession)
-        .where(ChatConsentSession.browser_session_id == browser_session_id)
-        .order_by(ChatConsentSession.id.desc())
+        select(ChatConsentSession.id)
+        .where(
+            ChatConsentSession.browser_session_id == browser_session_id,
+            ChatConsentSession.flow == ChatSessionFlow.LEAVE,
+            ChatConsentSession.status == ChatLinkStatus.REMOVED,
+            ChatConsentSession.id > join.id,
+        )
         .limit(1)
     )
-    record = result.scalar_one_or_none()
-    if record is None:
-        return False
-    return str(record.status) == ChatLinkStatus.ACCEPTED.value
+    return result.scalar_one_or_none() is None
 
 
 async def is_human_verified(session: AsyncSession, browser_session_id: str) -> bool:

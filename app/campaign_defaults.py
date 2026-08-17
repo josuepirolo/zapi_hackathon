@@ -70,16 +70,27 @@ LEAVE_GROUP_ASK = (
     "Responda SIM ou NAO."
 )
 
+LEAVE_LINK_DM = (
+    "Voce pediu sair do grupo *{group_name}* da demo Tech News.\n\n"
+    "Toque no link para confirmar a saida:\n{link}\n\n"
+    "O link expira em {minutes} minutos."
+)
+
+LEAVE_LINK_CHAT_REPLY = (
+    "Enviei um link de confirmacao de saida no WhatsApp para {masked}. "
+    "Abra a mensagem no celular, toque no link e confirme — vou aguardar aqui ate voce confirmar."
+)
+
 LEAVE_GROUP_SUCCESS = (
     "Pronto — voce foi removido do grupo *{group_name}*. "
     "Enviei a confirmacao no seu WhatsApp. Para entrar de novo, e so pedir aqui no chat."
 )
 
-LEAVE_GROUP_STAY = "Combinado — voce continua no grupo. Posso ajudar em mais alguma coisa?"
-
-LEAVE_GROUP_UNCLEAR = "Nao entendi. Quer mesmo sair do grupo? Responda SIM ou NAO."
-
 LEAVE_GROUP_FAILED = (
     "Nao consegui te remover do grupo agora. Tente de novo em instantes ou diga "
     "\"quero sair do grupo\" outra vez."
+)
+
+LEAVE_ALREADY_GONE = (
+    "Voce ja nao esta no grupo *{group_name}*. Para entrar de novo, diga que quer participar e informe seu WhatsApp."
 )
