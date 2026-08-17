@@ -12,7 +12,7 @@ FastAPI + SQLite + OpenAI + **Server MCP oficial** (`https://mcp.z-api.io/mcp`).
 | `POST /api/chat` | Backend do chat (`message`, `history[]` → `reply`, `tools_used[]`) |
 | `/health` | Health check |
 | `/tools-usage` | Checklist das 9 tools já usadas nesta execução |
-| `GET /assets/news/{id}.png` | Imagem pública da notícia (URL para `send-image` no MCP) |
+| `GET /assets/news/{id}.jpg` | Imagem pública da notícia (URL para `send-image` no MCP) |
 | `POST /api/news-assets/{id}` | Upload manual da PNG (header `X-Webhook-Secret`) |
 | `GET /api/news-assets/{id}/info` | Verifica se a imagem existe e qual URL pública usar |
 
@@ -41,7 +41,7 @@ Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
 
 ### Imagem da notícia (upload manual)
 
-O MCP rejeita `send-image` com base64 grande (`413 Request Entity Too Large`). O app envia a **URL pública** (`PUBLIC_BASE_URL/assets/news/zapi-mcp-intro.png`).
+O MCP rejeita `send-image` com base64 grande (`413 Request Entity Too Large`). O app envia a **URL pública** (`.../assets/news/zapi-mcp-intro.jpg?v=...`). Uploads são **comprimidos** (max 1024px, JPEG ~100KB).
 
 ```bash
 # Depois do deploy — substitua SECRET pelo WEBHOOK_SHARED_SECRET do .env
@@ -51,10 +51,10 @@ curl -X POST "https://desafiozapi.py.tec.br/api/news-assets/zapi-mcp-intro" \
 
 # Conferir
 curl "https://desafiozapi.py.tec.br/api/news-assets/zapi-mcp-intro/info"
-curl -I "https://desafiozapi.py.tec.br/assets/news/zapi-mcp-intro.png"
+curl -I "https://desafiozapi.py.tec.br/assets/news/zapi-mcp-intro.jpg"
 ```
 
-Se já existir PNG gerada pela OpenAI no volume, apague antes do upload: `rm -f data/news_assets/zapi-mcp-intro.png` na VM.
+Legado PNG no volume é reconvertido para JPEG no próximo envio da news.
 
 Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie não é obrigatório.
 O chat `/promocoes` usa **OpenAI + tools MCP** no fluxo de entrada (nome → interesse → WhatsApp); perguntas fora desse roteiro recebem resposta fixa sem chamar a API (economia de tokens).

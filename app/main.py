@@ -55,18 +55,20 @@ async def health() -> dict[str, str]:
 
 @app.get("/assets/news/{filename}")
 async def serve_news_asset(filename: str) -> FileResponse:
-    """PNG publico para Z-API `send-image` via URL (evita 413 com base64 no MCP)."""
-    if not filename.endswith(".png") or filename.count(".") != 1:
+    """Imagem publica para Z-API `send-image` via URL (evita 413 com base64 no MCP)."""
+    allowed = (".png", ".jpg", ".jpeg")
+    if not any(filename.endswith(ext) for ext in allowed) or filename.count(".") != 1:
         raise HTTPException(status_code=404, detail="Nao encontrado")
-    stem = filename[:-4]
+    stem, ext = filename.rsplit(".", 1)
     if not stem or not all(ch.isalnum() or ch in "-_" for ch in stem):
         raise HTTPException(status_code=404, detail="Nao encontrado")
     path = NEWS_ASSETS_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Nao encontrado")
+    media_type = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
     return FileResponse(
         path,
-        media_type="image/png",
+        media_type=media_type,
         headers={"Cache-Control": "no-cache, must-revalidate"},
     )
 
