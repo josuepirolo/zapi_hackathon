@@ -25,7 +25,7 @@ docker compose up -d --build
 
 Variáveis no `.env`: `WEBHOOK_SHARED_SECRET`, `OPENAPI_KEY`, opcional `OPENAI_MODEL`, `PUBLIC_BASE_URL`, `ZAPI_INSTANCE_PHONE` (MSISDN do WhatsApp da instância — bloqueado no chat `/promocoes` porque `group-create` não aceita o próprio número).
 
-Anti-bot (chat `/promocoes`): `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (Cloudflare Turnstile).
+Anti-bot (somente chat `/promocoes`): `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (Cloudflare Turnstile). Paginas `/confirmar/{token}` e `/sair/{token}` nao exigem Turnstile.
 Rate limit in-memory por IP: `CHAT_RATE_LIMIT_PER_MINUTE` (default 8), `CHAT_POLL_RATE_LIMIT_PER_MINUTE` (90), `CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE` (15).
 
 Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
