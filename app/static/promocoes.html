@@ -399,7 +399,7 @@ function unlockChatAfterHuman() {
   setSecurityCheck(false);
   setSendEnabled(true);
   hideTurnstileSection();
-  if (!welcomedAfterVerify) {
+  if (!welcomedAfterVerify && !isConsentDoneMarked()) {
     welcomedAfterVerify = true;
     showWelcomeAndPrivacy("Agora sim! Sou a assistente do Tech News (novidades de IA e MCP).");
   }
@@ -452,6 +452,34 @@ function beginSecurityVerification() {
   startTurnstileWidget();
 }
 
+async function fetchConsentStatus() {
+  const resp = await fetch(`/api/chat/consent/${encodeURIComponent(browserSessionId)}`);
+  const data = await resp.json();
+  if (data.session_id) {
+    browserSessionId = data.session_id;
+    localStorage.setItem("delega_chat_session", browserSessionId);
+  }
+  return data;
+}
+
+function restoreAcceptedMemberUI(data) {
+  if (consentAcceptedHintShown) return;
+  stopConsentPoll();
+  clearConsentWaiting();
+  sessionStorage.setItem("delega_consent_done", "1");
+  setWaiting(null);
+  consentAcceptedHintShown = true;
+  const msg =
+    data.message ||
+    "Tudo pronto! Você já está no grupo Tech News e a primeira novidade foi enviada no seu WhatsApp. 🚀";
+  const tools = data.tools_used || [];
+  addAssistant(msg, tools);
+  history.push({ role: "assistant", content: msg });
+  addAssistant(POST_JOIN_HINT, []);
+  history.push({ role: "assistant", content: POST_JOIN_HINT });
+  reenableAfterConsent();
+}
+
 async function checkExistingHumanVerification() {
   if (!turnstileEnabled) {
     humanVerified = true;
@@ -461,22 +489,15 @@ async function checkExistingHumanVerification() {
     return;
   }
 
-  // Enviar so libera no callback do Turnstile nesta aba — nunca pelo cache do servidor sozinho.
+  if (await refreshHumanStatusFromServer()) {
+    unlockChatAfterHuman();
+    return;
+  }
+
   humanVerified = false;
   setSendEnabled(false);
   setSecurityCheck(true);
   startTurnstileWidget();
-
-  try {
-    const resp = await fetch(`/api/chat/human/${encodeURIComponent(browserSessionId)}`);
-    const data = await resp.json();
-    if (data.session_id) {
-      browserSessionId = data.session_id;
-      localStorage.setItem("delega_chat_session", browserSessionId);
-    }
-  } catch (err) {
-    /* mantém bloqueado ate o Turnstile concluir */
-  }
 }
 
 function stopConsentPoll() {
@@ -615,7 +636,7 @@ async function resumeConsentIfNeeded() {
       startConsentPoll(data.status);
     } else if (data.status === "removed" && !consentAcceptedHintShown) {
       handleLeaveRemoved(data);
-    } else if (data.status === "accepted" && !consentAcceptedHintShown && !isConsentDoneMarked()) {
+    } else if (data.status === "accepted" && !consentAcceptedHintShown) {
       handleConsentAccepted(data);
     } else if (data.status === "expired" || data.status === "none") {
       clearConsentWaiting();
@@ -650,10 +671,21 @@ function openChat() {
   panel.classList.add("open");
   overlay.classList.add("open");
   loadChatConfig().then(async () => {
+    let consentData = { status: "none" };
+    try {
+      consentData = await fetchConsentStatus();
+    } catch (err) {
+      /* segue fluxo normal */
+    }
+    const alreadyInGroup = consentData.status === "accepted";
+
     await checkExistingHumanVerification();
+
     if (!opened) {
       opened = true;
-      if (humanVerified) {
+      if (alreadyInGroup) {
+        restoreAcceptedMemberUI(consentData);
+      } else if (humanVerified) {
         showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       } else if (turnstileEnabled) {
         addAssistant(
@@ -663,7 +695,10 @@ function openChat() {
       } else {
         showWelcomeAndPrivacy("Olá! Sou a assistente do Tech News (novidades de IA e MCP).");
       }
+    } else if (alreadyInGroup) {
+      restoreAcceptedMemberUI(consentData);
     }
+
     if (humanVerified) {
       await resumeConsentIfNeeded();
     }
