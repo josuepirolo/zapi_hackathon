@@ -323,6 +323,67 @@ def _welcome_dm_text(record: ChatConsentSession) -> str:
     return WELCOME_MESSAGE
 
 
+async def _is_still_group_member(record: ChatConsentSession) -> bool:
+    """Confere no WhatsApp se o telefone ainda esta no grupo pessoal."""
+    if not record.whatsapp_group_id:
+        return False
+    try:
+        meta = await mcp_client.call_tool("group-metadata", {"groupId": record.whatsapp_group_id})
+        return mcp_client.find_participant(meta, record.phone) is not None
+    except Exception:
+        logger.exception(
+            "Falha group-metadata ao checar membro %s no grupo %s",
+            record.phone,
+            record.whatsapp_group_id,
+        )
+        # Falha transiente no MCP: nao invalidar participacao ativa.
+        return True
+
+
+async def _record_membership_ended(
+    session: AsyncSession,
+    join_record: ChatConsentSession,
+    *,
+    reason: str = "not_in_group",
+) -> None:
+    """Registra saida (sintetica) para liberar re-entrada no chat do browser."""
+    result = await session.execute(
+        select(ChatConsentSession.id).where(
+            ChatConsentSession.browser_session_id == join_record.browser_session_id,
+            ChatConsentSession.flow == ChatSessionFlow.LEAVE,
+            ChatConsentSession.status == ChatLinkStatus.REMOVED,
+            ChatConsentSession.id > join_record.id,
+        ).limit(1)
+    )
+    if result.scalar_one_or_none() is not None:
+        return
+
+    now = datetime.now(timezone.utc)
+    session.add(
+        ChatConsentSession(
+            browser_session_id=join_record.browser_session_id,
+            token=uuid.uuid4().hex,
+            phone=join_record.phone,
+            name=join_record.name,
+            campaign_id=join_record.campaign_id,
+            flow=ChatSessionFlow.LEAVE,
+            status=ChatLinkStatus.REMOVED,
+            whatsapp_group_id=join_record.whatsapp_group_id,
+            group_name=join_record.group_name,
+            created_at=now,
+            accepted_at=now,
+        )
+    )
+    await session.commit()
+    logger.info(
+        "Chat membership ended browser=%s phone=%s grupo=%s reason=%s",
+        join_record.browser_session_id,
+        join_record.phone,
+        join_record.whatsapp_group_id,
+        reason,
+    )
+
+
 async def get_accepted_consent_session(
     session: AsyncSession, browser_session_id: str
 ) -> ChatConsentSession | None:
@@ -364,7 +425,8 @@ async def start_tracked_leave(
     try:
         meta = await mcp_client.call_tool("group-metadata", {"groupId": join_record.whatsapp_group_id})
         if mcp_client.find_participant(meta, join_record.phone) is None:
-            return False, LEAVE_ALREADY_GONE.format(group_name=label), [], "none"
+            await _record_membership_ended(session, join_record, reason="leave_precheck_absent")
+            return False, LEAVE_ALREADY_GONE.format(group_name=label), [], "removed"
     except Exception:
         logger.exception("Chat leave: falha group-metadata pre-check %s", join_record.whatsapp_group_id)
 
@@ -661,6 +723,16 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
         return {"status": "none"}
 
     record = await _expire_if_needed(session, record, now)
+
+    if (
+        record.flow == ChatSessionFlow.JOIN
+        and record.status == ChatLinkStatus.ACCEPTED
+        and record.whatsapp_group_id
+        and not await _is_still_group_member(record)
+    ):
+        await _record_membership_ended(session, record, reason="poll_stale_accepted")
+        return {"status": "none"}
+
     payload: dict[str, str | list[str]] = {"status": str(record.status)}
     if record.flow == ChatSessionFlow.LEAVE and record.status == ChatLinkStatus.REMOVED:
         payload["tools_used"] = ["group-remove-participant", "group-metadata", "send-text"]
@@ -799,7 +871,12 @@ async def has_accepted_chat_consent(session: AsyncSession, browser_session_id: s
         )
         .limit(1)
     )
-    return result.scalar_one_or_none() is None
+    if result.scalar_one_or_none() is not None:
+        return False
+    if not await _is_still_group_member(join):
+        await _record_membership_ended(session, join, reason="chat_stale_accepted")
+        return False
+    return True
 
 
 async def is_human_verified(session: AsyncSession, browser_session_id: str) -> bool:
