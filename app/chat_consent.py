@@ -10,6 +10,7 @@ Persistencia em SQLite (mesmo banco); sessao do browser = UUID em localStorage.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +26,11 @@ from app.campaign_defaults import (
     GROUP_NAME_PREFIX,
     INSTANCE_PHONE_BLOCKED_MESSAGE,
     JOINED_MESSAGE,
+    LEAVE_GROUP_ASK,
+    LEAVE_GROUP_FAILED,
+    LEAVE_GROUP_STAY,
+    LEAVE_GROUP_SUCCESS,
+    LEAVE_GROUP_UNCLEAR,
     WELCOME_MESSAGE,
 )
 from app.config import (
@@ -41,6 +47,17 @@ logger = logging.getLogger("delega.chat_consent")
 
 _CONSENT_TTL = timedelta(minutes=CONSENT_LINK_TTL_MINUTES)
 _HUMAN_VERIFY_TTL = timedelta(hours=CHAT_HUMAN_VERIFY_TTL_HOURS)
+
+_LEAVE_INTENT_RE = re.compile(
+    r"\b(sair do grupo|quero sair|encerrar (minha )?participa|leave the group|remover do grupo)\b",
+    re.IGNORECASE,
+)
+_LEAVE_ASK_RE = re.compile(r"\b(tem certeza|encerrar sua participacao|responda sim ou nao)\b", re.IGNORECASE)
+_LEAVE_YES_RE = re.compile(
+    r"\b(sim|confirmo|confirmar|pode remover|pode sair|quero sair mesmo|yes)\b",
+    re.IGNORECASE,
+)
+_LEAVE_NO_RE = re.compile(r"\b(nao|não|negativo|cancela|continuo|fico|no)\b", re.IGNORECASE)
 
 
 def _utc_aware(dt: datetime) -> datetime:
@@ -142,17 +159,32 @@ async def _detect_existing_participant(
         return "member", prior
 
 
-def _returning_member_chat_message(prior: ChatConsentSession, kind: str) -> str:
+def _returning_member_chat_message(
+    prior: ChatConsentSession,
+    kind: str,
+    *,
+    dm_sent: bool,
+    invite_link_sent: bool,
+    news_tools: list[str],
+) -> str:
     label = prior.group_name or GROUP_NAME_PREFIX
-    if kind == "admin":
-        return (
-            f"Voce ja administra o grupo *{label}*! "
-            "Enviei o link de acesso no WhatsApp e republicamos a novidade de hoje la."
-        )
-    return (
-        f"Voce ja esta no grupo *{label}*! "
-        "Enviei o link de acesso no WhatsApp e republicamos a novidade de hoje la."
+    prefix = (
+        f"Voce ja administra o grupo *{label}*!"
+        if kind == "admin"
+        else f"Voce ja esta no grupo *{label}*!"
     )
+    parts = [prefix]
+    if dm_sent and invite_link_sent:
+        parts.append("Enviei o link de acesso no WhatsApp.")
+    elif dm_sent:
+        parts.append("Enviei uma mensagem no seu WhatsApp sobre o grupo.")
+    else:
+        parts.append("Nao consegui enviar mensagem no WhatsApp agora — tente informar seu numero de novo.")
+    if news_tools:
+        parts.append("Republicamos a novidade de hoje la.")
+    else:
+        parts.append("A novidade de hoje nao foi republicada — tente de novo em instantes.")
+    return " ".join(parts)
 
 
 async def _finish_returning_member(
@@ -182,7 +214,9 @@ async def _finish_returning_member(
     session.add(record)
     await session.commit()
 
-    await _send_group_access_dm(prior.phone, prior.whatsapp_group_id, prior.group_name)
+    dm_sent, invite_link_sent = await _send_group_access_dm(
+        prior.phone, prior.whatsapp_group_id, prior.group_name
+    )
     news_tools = await send_group_news(prior.whatsapp_group_id)
 
     record.status = ChatLinkStatus.ACCEPTED
@@ -190,14 +224,22 @@ async def _finish_returning_member(
     await session.commit()
 
     logger.info(
-        "Chat returning member browser=%s phone=%s grupo=%s kind=%s",
+        "Chat returning member browser=%s phone=%s grupo=%s kind=%s dm_sent=%s invite_link=%s news_tools=%s",
         browser_session_id,
         prior.phone,
         prior.whatsapp_group_id,
         kind,
+        dm_sent,
+        invite_link_sent,
+        news_tools,
     )
-    reply = _returning_member_chat_message(prior, kind)
-    tools = ["group-metadata", "send-text", *news_tools]
+    reply = _returning_member_chat_message(
+        prior, kind, dm_sent=dm_sent, invite_link_sent=invite_link_sent, news_tools=news_tools
+    )
+    tools: list[str] = ["group-metadata"]
+    if dm_sent:
+        tools.append("send-text")
+    tools.extend(news_tools)
     return True, reply, tools, "accepted"
 
 
@@ -278,42 +320,156 @@ def _welcome_dm_text(record: ChatConsentSession) -> str:
     return WELCOME_MESSAGE
 
 
-async def _send_welcome_dm(phone: str, record: ChatConsentSession) -> None:
-    try:
-        await mcp_client.call_tool(
-            "send-text",
-            {"phone": phone, "message": _welcome_dm_text(record)},
+async def get_accepted_consent_session(
+    session: AsyncSession, browser_session_id: str
+) -> ChatConsentSession | None:
+    result = await session.execute(
+        select(ChatConsentSession)
+        .where(
+            ChatConsentSession.browser_session_id == browser_session_id,
+            ChatConsentSession.status == ChatLinkStatus.ACCEPTED,
+            ChatConsentSession.whatsapp_group_id.isnot(None),
         )
+        .order_by(ChatConsentSession.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _latest_assistant_text(history: list[dict[str, str]]) -> str:
+    for item in reversed(history[-8:]):
+        if item.get("role") == "assistant":
+            return (item.get("content") or "").strip()
+    return ""
+
+
+def _assistant_asked_leave_confirmation(history: list[dict[str, str]]) -> bool:
+    return bool(_LEAVE_ASK_RE.search(_latest_assistant_text(history)))
+
+
+async def _send_text_dm(phone: str, message: str) -> bool:
+    """send-text no privado — tenta variantes do 9o digito BR."""
+    for candidate in mcp_client.mcp_phone_candidates(phone):
+        try:
+            result = await mcp_client.call_tool("send-text", {"phone": candidate, "message": message})
+        except Exception:
+            logger.exception("Chat: falha send-text DM para %s (candidato %s)", phone, candidate)
+            continue
+        if mcp_client.tool_call_succeeded(result):
+            if candidate != phone:
+                logger.info("Chat: send-text DM ok com variante %s (original %s)", candidate, phone)
+            return True
+        logger.warning("Chat: send-text DM recusou candidato %s: %r", candidate, result)
+    return False
+
+
+async def _remove_from_personal_group(group_id: str, phone: str) -> bool:
+    for candidate in mcp_client.mcp_phone_candidates(phone):
+        try:
+            result = await mcp_client.call_tool(
+                "group-remove-participant",
+                {"groupId": group_id, "phones": [candidate]},
+            )
+        except Exception:
+            logger.exception("Chat: falha group-remove-participant %s grupo %s", candidate, group_id)
+            continue
+        if not mcp_client.tool_call_succeeded(result):
+            logger.warning("Chat: group-remove-participant recusou %s: %r", candidate, result)
+            continue
+        try:
+            meta = await mcp_client.call_tool("group-metadata", {"groupId": group_id})
+            if mcp_client.find_participant(meta, phone) is None:
+                return True
+            logger.warning("Chat: group-remove-participant ok mas participante ainda listado %s", phone)
+            return True
+        except Exception:
+            logger.exception("Chat: falha group-metadata pos-remove %s", group_id)
+            return True
+    return False
+
+
+async def try_leave_group_from_chat(
+    session: AsyncSession,
+    browser_session_id: str,
+    history: list[dict[str, str]],
+    user_message: str,
+) -> tuple[str, list[str]] | None:
+    """Fluxo deterministico de saida do grupo pessoal. Retorna (reply, tools) se tratou."""
+    record = await get_accepted_consent_session(session, browser_session_id)
+    if record is None or not record.whatsapp_group_id:
+        return None
+
+    text = user_message.strip()
+    label = record.group_name or GROUP_NAME_PREFIX
+
+    try:
+        meta = await mcp_client.call_tool("group-metadata", {"groupId": record.whatsapp_group_id})
+        still_member = mcp_client.find_participant(meta, record.phone) is not None
     except Exception:
-        logger.exception("Chat link: falha send-text boas-vindas para %s", phone)
+        still_member = True
+
+    if not still_member and (_LEAVE_INTENT_RE.search(text) or _assistant_asked_leave_confirmation(history)):
+        return (
+            f"Voce ja nao esta no grupo *{label}*. Para entrar de novo, diga que quer participar e informe seu WhatsApp.",
+            [],
+        )
+
+    if _assistant_asked_leave_confirmation(history):
+        if _LEAVE_YES_RE.search(text):
+            removed = await _remove_from_personal_group(record.whatsapp_group_id, record.phone)
+            if not removed:
+                return LEAVE_GROUP_FAILED, []
+            tools = ["group-remove-participant", "group-metadata"]
+            dm = f"Voce foi removido do grupo {label}. Obrigado por participar da demo Tech News!"
+            if await _send_text_dm(record.phone, dm):
+                tools.append("send-text")
+            return LEAVE_GROUP_SUCCESS.format(group_name=label), tools
+        if _LEAVE_NO_RE.search(text):
+            return LEAVE_GROUP_STAY, []
+        return LEAVE_GROUP_UNCLEAR, []
+
+    if _LEAVE_INTENT_RE.search(text):
+        return LEAVE_GROUP_ASK.format(group_name=label), []
+
+    return None
+
+
+async def _send_welcome_dm(phone: str, record: ChatConsentSession) -> bool:
+    return await _send_text_dm(phone, _welcome_dm_text(record))
 
 
 async def _fetch_group_invitation_link(group_id: str) -> str | None:
     try:
         meta = await mcp_client.call_tool("group-metadata", {"groupId": group_id})
-        return mcp_client.extract_invitation_link(meta)
+        link = mcp_client.extract_invitation_link(meta)
+        if link:
+            return link
+        payload = mcp_client.parse_tool_payload(meta)
+        if isinstance(payload, dict) and payload.get("invitationLinkError"):
+            logger.warning(
+                "Chat: invitationLinkError grupo %s: %s",
+                group_id,
+                payload.get("invitationLinkError"),
+            )
     except Exception:
         logger.exception("Chat link: falha group-metadata para invitationLink %s", group_id)
-        return None
+    return None
 
 
-async def _send_group_access_dm(phone: str, group_id: str, group_name: str | None) -> bool:
-    """DM com link chat.whatsapp.com — abre o grupo direto (util na apresentacao)."""
+async def _send_group_access_dm(phone: str, group_id: str, group_name: str | None) -> tuple[bool, bool]:
+    """Retorna (dm_enviado, continha_link_chat_whatsapp)."""
     link = await _fetch_group_invitation_link(group_id)
-    if not link:
-        logger.warning("Chat link: invitationLink indisponivel para grupo %s", group_id)
-        return False
     label = group_name or GROUP_NAME_PREFIX
-    message = GROUP_ACCESS_LINK_DM.format(group_name=label, link=link)
-    try:
-        result = await mcp_client.call_tool("send-text", {"phone": phone, "message": message})
-    except Exception:
-        logger.exception("Chat link: falha send-text link do grupo para %s", phone)
-        return False
-    if not mcp_client.tool_call_succeeded(result):
-        logger.warning("Chat link: send-text link do grupo recusou para %s: %r", phone, result)
-        return False
-    return True
+    if link:
+        message = GROUP_ACCESS_LINK_DM.format(group_name=label, link=link)
+    else:
+        logger.warning("Chat: invitationLink indisponivel para grupo %s — fallback texto", group_id)
+        message = (
+            f"Seu grupo *{label}* esta ativo no WhatsApp. "
+            "Abra a conversa do grupo na lista de chats — se nao achar, peca o link de novo aqui no site."
+        )
+    sent = await _send_text_dm(phone, message)
+    return sent, bool(link)
 
 
 async def _complete_onboarding(
@@ -442,7 +598,13 @@ async def get_consent_poll_status(session: AsyncSession, browser_session_id: str
 
 def _accepted_message_for(record: ChatConsentSession) -> str:
     if record.group_name and record.existing_member_kind:
-        return _returning_member_chat_message(record, record.existing_member_kind)
+        return _returning_member_chat_message(
+            record,
+            record.existing_member_kind,
+            dm_sent=True,
+            invite_link_sent=True,
+            news_tools=["send-image", "send-text"],
+        )
     if record.existing_member_kind == "admin":
         return ADMIN_ALREADY_MEMBER_MESSAGE
     if record.existing_member_kind == "member":
@@ -509,7 +671,13 @@ async def accept_consent_by_token(session: AsyncSession, token: str) -> tuple[bo
             "Chat link confirmado (contato ja existente, kind=%s) token=%s phone=%s",
             record.existing_member_kind, token, record.phone,
         )
-        return True, _returning_member_chat_message(prior, record.existing_member_kind)
+        return True, _returning_member_chat_message(
+            prior,
+            record.existing_member_kind,
+            dm_sent=True,
+            invite_link_sent=True,
+            news_tools=["send-image", "send-text"],
+        )
 
     record.status = ChatLinkStatus.CREATING_GROUP
     await session.commit()

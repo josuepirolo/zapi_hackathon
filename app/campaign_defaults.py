@@ -64,3 +64,22 @@ POST_JOIN_CHAT_MESSAGE = (
     "Abra seu WhatsApp agora — a novidade ja esta la. 📱 "
     "Depois disso, pode me perguntar sobre IA, MCP ou esta demo."
 )
+
+LEAVE_GROUP_ASK = (
+    "Tem certeza que quer sair do grupo *{group_name}* e encerrar sua participacao nesta demo? "
+    "Responda SIM ou NAO."
+)
+
+LEAVE_GROUP_SUCCESS = (
+    "Pronto — voce foi removido do grupo *{group_name}*. "
+    "Enviei a confirmacao no seu WhatsApp. Para entrar de novo, e so pedir aqui no chat."
+)
+
+LEAVE_GROUP_STAY = "Combinado — voce continua no grupo. Posso ajudar em mais alguma coisa?"
+
+LEAVE_GROUP_UNCLEAR = "Nao entendi. Quer mesmo sair do grupo? Responda SIM ou NAO."
+
+LEAVE_GROUP_FAILED = (
+    "Nao consegui te remover do grupo agora. Tente de novo em instantes ou diga "
+    "\"quero sair do grupo\" outra vez."
+)

@@ -24,7 +24,12 @@ from app.campaign_defaults import (
     TRIGGER_KEYWORD,
     WELCOME_MESSAGE,
 )
-from app.chat_consent import has_accepted_chat_consent, start_tracked_consent
+from app.chat_consent import (
+    get_accepted_consent_session,
+    has_accepted_chat_consent,
+    start_tracked_consent,
+    try_leave_group_from_chat,
+)
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.models import Campaign
 
@@ -41,7 +46,7 @@ class ChatTurnResult:
     consent_status: str = "none"
 
 # Schemas alinhados ao MCP Z-API (docs/zapi-mcp-capabilities.md).
-MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
+_MCP_OPENAI_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -70,22 +75,6 @@ MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
                     "caption": {"type": "string"},
                 },
                 "required": ["phone", "image"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "send-video",
-            "description": "Envia video (URL ou base64) via MCP Z-API.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {"type": "string"},
-                    "video": {"type": "string"},
-                    "caption": {"type": "string"},
-                },
-                "required": ["phone", "video"],
             },
         },
     },
@@ -133,51 +122,18 @@ MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-remove-participant",
-            "description": "Remove participante(s) de um grupo.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "groupId": {"type": "string"},
-                    "phones": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["groupId", "phones"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-add-admin",
-            "description": "Promove participante(s) a admin do grupo.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "groupId": {"type": "string"},
-                    "phones": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["groupId", "phones"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-remove-admin",
-            "description": "Remove admin de participante(s) no grupo.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "groupId": {"type": "string"},
-                    "phones": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["groupId", "phones"],
-            },
-        },
-    },
+]
+
+# Demo /promocoes: sem video/admin; saida do grupo e fluxo deterministico no backend.
+_CHAT_MCP_TOOL_NAMES = {
+    "send-text",
+    "send-image",
+    "group-create",
+    "group-metadata",
+    "group-add-participant",
+}
+MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
+    tool for tool in _MCP_OPENAI_TOOL_DEFINITIONS if tool["function"]["name"] in _CHAT_MCP_TOOL_NAMES
 ]
 
 
@@ -330,21 +286,23 @@ def _post_onboarding_quick_reply(user_message: str) -> str | None:
     return None
 
 
-def _build_system_prompt(campaign: Campaign | None, onboarding_complete: bool = False) -> str:
-    if campaign and campaign.whatsapp_group_id:
+def _build_system_prompt(
+    campaign: Campaign | None,
+    onboarding_complete: bool = False,
+    personal_group_line: str = "",
+) -> str:
+    if personal_group_line:
+        group_line = personal_group_line
+    elif campaign and campaign.whatsapp_group_id:
         group_line = (
-            f"Grupo ativo: sim, groupId=`{campaign.whatsapp_group_id}`, campanha `{campaign.name}`."
+            f"Grupo da campanha admin: groupId=`{campaign.whatsapp_group_id}`, nome `{campaign.name}`."
         )
     elif campaign:
         group_line = (
-            f"Grupo ativo: ainda nao — use group-create com groupName=`{campaign.name}` "
-            "e phones=[telefone do visitante], autoInvite=true."
+            f"Grupo da campanha admin: ainda nao — onboarding usa grupos pessoais `{campaign.name} #NNN`."
         )
     else:
-        group_line = (
-            "Grupo ativo: ainda nao — use group-create com groupName=`Tech News IA & MCP` "
-            "e phones=[telefone do visitante], autoInvite=true."
-        )
+        group_line = "Grupo: onboarding cria grupos pessoais Tech News IA & MCP #NNN por visitante."
     return f"""Voce e a assistente virtual do Tech News, demo ao vivo do Desafio MCP Z-API 2026.
 Stack desta demo: conversa conduzida por OpenAI; acoes no WhatsApp executadas pelo Server MCP oficial da Z-API.
 
@@ -379,7 +337,8 @@ Regras:
 - Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
 - Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
 - Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos.
-{"- Onboarding ja concluido: o visitante entrou no grupo. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
+- Para sair do grupo ou encerrar a demo, o visitante deve dizer claramente (ex.: "quero sair do grupo") — o backend confirma SIM/NAO e executa group-remove-participant. Nunca invente remocao nem diga que removeu sem a tool ter sucesso.
+{"- Onboarding ja concluido: o visitante entrou no grupo pessoal acima. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
 
 
 def _tool_result_text(mcp_result: Any) -> str:
@@ -407,13 +366,34 @@ async def run_chat_turn(
         return ChatTurnResult(reply=auto_reply, tools_used=auto_tools, consent_status=consent_status)
 
     onboarding_complete = await has_accepted_chat_consent(session, browser_session_id)
+
+    leave_result = await try_leave_group_from_chat(
+        session, browser_session_id, history, user_message
+    )
+    if leave_result is not None:
+        reply, tools = leave_result
+        return ChatTurnResult(reply=reply, tools_used=tools)
+
     if onboarding_complete:
         quick = _post_onboarding_quick_reply(user_message)
         if quick:
             return ChatTurnResult(reply=quick, tools_used=[])
 
+    personal_group_line = ""
+    if onboarding_complete:
+        record = await get_accepted_consent_session(session, browser_session_id)
+        if record and record.whatsapp_group_id:
+            personal_group_line = (
+                f"Grupo pessoal deste visitante: groupId=`{record.whatsapp_group_id}`, "
+                f"nome=`{record.group_name or 'Tech News IA & MCP'}`. "
+                "Use esse groupId em group-metadata, send-text/send-image no grupo, etc."
+            )
+
     messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": _build_system_prompt(campaign, onboarding_complete)},
+        {
+            "role": "system",
+            "content": _build_system_prompt(campaign, onboarding_complete, personal_group_line),
+        },
     ]
     for item in history[-20:]:
         role = item.get("role")
@@ -474,7 +454,8 @@ async def run_chat_turn(
                         if group_id:
                             campaign.whatsapp_group_id = group_id
                             await session.commit()
-                    tools_used.append(name)
+                    if mcp_client.tool_call_succeeded(result):
+                        tools_used.append(name)
                     tool_content = _tool_result_text(result)
                 except Exception as exc:
                     logger.exception("Falha MCP tool %s", name)
