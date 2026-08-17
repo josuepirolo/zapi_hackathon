@@ -9,7 +9,7 @@ FastAPI + SQLite + OpenAI (function-calling) + **Server MCP oficial da Z-API** (
 | `/promocoes` | Chat público **Tech News** — fluxo principal da demo (IA + MCP) |
 | `/confirmar/{token}` | Confirmação de entrada no grupo (link enviado via `send-text`) |
 | `/sair/{token}` | Confirmação de saída do grupo (link enviado via `send-text`) |
-| `/` | Painel admin (campanhas, checklist das 9 tools MCP) |
+| `/` | Redireciona para `/promocoes` |
 | `/participar` | Landing legada — fluxo por palavra-chave `#desafiozapi` no WhatsApp |
 
 ## API
@@ -29,7 +29,8 @@ FastAPI + SQLite + OpenAI (function-calling) + **Server MCP oficial da Z-API** (
 | `POST /api/news-assets/{id}` | Upload manual da imagem da notícia (header `X-Webhook-Secret`) |
 | `GET /api/news-assets/{id}/info` | Verifica se a imagem existe e qual URL pública usar |
 | `POST /webhooks/zapi/{secret}/on-message-received` | Webhook do fluxo legado (`/participar`) |
-| `POST/GET/DELETE /campaigns/...` | CRUD de campanhas e participantes do painel admin (`/`) |
+
+**Painel admin (`app/admin_api.py`, rotas `/campaigns/...`) está desligado** — sem autenticação, ficaria exposto durante os dias de avaliação pública do desafio. Código intacto, só não é registrado em `app/main.py` (`app.include_router(admin_router)` comentado/removido); religar é reverter esse ponto.
 
 ## Deploy (VM)
 
