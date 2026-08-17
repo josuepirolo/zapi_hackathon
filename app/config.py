@@ -51,5 +51,6 @@ CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE = int(os.environ.get("CHAT_ACCEPT_RATE_LIMIT_P
 CHAT_HUMAN_VERIFY_TTL_HOURS = int(os.environ.get("CHAT_HUMAN_VERIFY_TTL_HOURS", "12"))
 
 # MSISDN do WhatsApp conectado à instancia Z-API (group-create recusa este numero).
-# Confirmado em app/static/landing.html e testes ao vivo 2026-08-16.
-ZAPI_INSTANCE_PHONE = os.environ.get("ZAPI_INSTANCE_PHONE", "5544998094320").strip()
+# Confirmado em app/static/landing.html e testes ao vivo 2026-08-16. Sem
+# default hardcoded aqui de proposito (numero real, PII) - definir no .env.
+ZAPI_INSTANCE_PHONE = os.environ.get("ZAPI_INSTANCE_PHONE", "").strip()
