@@ -337,7 +337,7 @@ Regras:
 - Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
 - Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
 - Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos.
-- Para sair do grupo ou encerrar a demo, o visitante deve dizer claramente (ex.: "quero sair do grupo") — o backend confirma SIM/NAO e executa group-remove-participant. Nunca invente remocao nem diga que removeu sem a tool ter sucesso.
+- Para sair do grupo ou encerrar a demo, o visitante diz "quero sair do grupo" — o backend envia link de confirmacao no WhatsApp (igual a entrada) e so remove apos o clique. Nunca invente remocao.
 {"- Onboarding ja concluido: o visitante entrou no grupo pessoal acima. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
 
 
@@ -367,12 +367,10 @@ async def run_chat_turn(
 
     onboarding_complete = await has_accepted_chat_consent(session, browser_session_id)
 
-    leave_result = await try_leave_group_from_chat(
-        session, browser_session_id, history, user_message
-    )
+    leave_result = await try_leave_group_from_chat(session, browser_session_id, user_message)
     if leave_result is not None:
-        reply, tools = leave_result
-        return ChatTurnResult(reply=reply, tools_used=tools)
+        ok, reply, tools, consent_status = leave_result
+        return ChatTurnResult(reply=reply, tools_used=tools, consent_status=consent_status)
 
     if onboarding_complete:
         quick = _post_onboarding_quick_reply(user_message)

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chat_agent import run_chat_turn
 from app.chat_consent import (
     accept_consent_by_token,
+    accept_leave_by_token,
     get_consent_poll_status,
     is_human_verified,
     mark_human_verified,
@@ -111,6 +112,9 @@ class ConsentPollResponse(BaseModel):
         "preparing_content",
         "accepted",
         "expired",
+        "remove_pending",
+        "removing",
+        "removed",
     ]
     tools_used: list[str] = Field(default_factory=list)
     message: str | None = None
@@ -201,6 +205,9 @@ async def poll_chat_consent(
         "preparing_content",
         "accepted",
         "expired",
+        "remove_pending",
+        "removing",
+        "removed",
     )
     if status not in allowed:
         status = "none"
@@ -227,4 +234,21 @@ async def accept_chat_consent(
     if not token or len(token) > 128:
         raise HTTPException(status_code=400, detail="Token invalido")
     ok, message = await accept_consent_by_token(session, token)
+    return ConsentAcceptResponse(ok=ok, message=message)
+
+
+@router.post("/chat/leave/accept/{token}", response_model=ConsentAcceptResponse)
+async def accept_chat_leave(
+    token: str,
+    request: Request,
+    body: ConsentAcceptRequest = ConsentAcceptRequest(),
+    session: AsyncSession = Depends(get_session),
+) -> ConsentAcceptResponse:
+    _rate_limit_or_429(request, "chat_leave_accept", CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE)
+    await _verify_turnstile_token(request, body.turnstile_token)
+
+    token = token.strip()
+    if not token or len(token) > 128:
+        raise HTTPException(status_code=400, detail="Token invalido")
+    ok, message = await accept_leave_by_token(session, token)
     return ConsentAcceptResponse(ok=ok, message=message)

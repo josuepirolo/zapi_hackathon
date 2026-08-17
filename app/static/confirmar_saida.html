@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Confirmar saída — Tech News IA & MCP</title>
+<style>
+  :root { --bg:#0f2a1c; --card:#fff; --text:#17301f; --muted:#5b6b60; --accent:#1e7a4d; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at top, #1e7a4d 0%, #0f2a1c 70%);
+    padding: 24px;
+  }
+  .card {
+    background: var(--card); color: var(--text); border-radius: 18px; max-width: 420px; width: 100%;
+    padding: 36px 28px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  }
+  h1 { margin: 0 0 12px; font-size: 1.4rem; }
+  p { color: var(--muted); line-height: 1.5; margin: 0 0 24px; }
+  #turnstile-box { display: flex; justify-content: center; margin-bottom: 16px; min-height: 65px; }
+  .turnstile-section { margin-bottom: 8px; }
+  .turnstile-hint {
+    font-size: 0.85rem; color: var(--muted); margin: 0 0 12px; line-height: 1.4;
+  }
+  .turnstile-section.hidden { display: none; }
+  button {
+    width: 100%; border: none; background: var(--accent); color: #fff; font-weight: 700;
+    font-size: 1rem; padding: 14px 16px; border-radius: 12px; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .result { margin-top: 16px; font-size: 0.95rem; }
+  .ok { color: var(--accent); font-weight: 600; }
+  .err { color: #b42318; font-weight: 600; }
+</style>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</head>
+<body>
+<div class="card">
+  <h1 id="title">Confirmar saída</h1>
+  <p id="subtitle">Toque abaixo para confirmar que deseja sair do seu grupo Tech News e encerrar sua participação nesta demo.</p>
+  <div class="turnstile-section hidden" id="turnstile-section">
+    <p class="turnstile-hint" id="turnstile-hint">Complete a verificação de segurança abaixo antes de confirmar.</p>
+    <div id="turnstile-box"></div>
+  </div>
+  <button type="button" id="confirm-btn">Confirmar minha saída</button>
+  <div class="result" id="result"></div>
+</div>
+<script>
+const token = location.pathname.split("/").filter(Boolean).pop() || "";
+const btn = document.getElementById("confirm-btn");
+const resultEl = document.getElementById("result");
+const turnstileSection = document.getElementById("turnstile-section");
+let turnstileEnabled = false;
+let turnstileSiteKey = null;
+let turnstileWidgetId = null;
+let turnstileTokenReady = false;
+let turnstileWidgetReady = false;
+
+function startTurnstileWidget() {
+  if (!turnstileEnabled || !turnstileSiteKey) {
+    turnstileSection.classList.add("hidden");
+    btn.disabled = false;
+    turnstileWidgetReady = true;
+    return;
+  }
+  turnstileSection.classList.remove("hidden");
+  btn.disabled = true;
+  turnstileTokenReady = false;
+  turnstileWidgetReady = false;
+  resultEl.innerHTML = `<span class="muted" style="color:var(--muted);font-size:0.9rem;">Carregando verificacao Cloudflare…</span>`;
+  const run = () => {
+    if (turnstileWidgetId !== null) return;
+    turnstileWidgetId = turnstile.render("#turnstile-box", {
+      sitekey: turnstileSiteKey,
+      theme: "light",
+      size: "normal",
+      callback: () => {
+        turnstileTokenReady = true;
+        btn.disabled = false;
+        resultEl.textContent = "";
+      },
+      "expired-callback": () => {
+        turnstileTokenReady = false;
+        btn.disabled = true;
+        resultEl.innerHTML = `<span class="err">Verificacao expirou. Marque o Cloudflare de novo.</span>`;
+        if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
+          turnstile.reset(turnstileWidgetId);
+        }
+      },
+      "error-callback": () => {
+        turnstileTokenReady = false;
+        turnstileWidgetReady = false;
+        btn.disabled = true;
+        resultEl.innerHTML = `<span class="err">Falha ao carregar Cloudflare. Recarregue a pagina ou tente em outro navegador.</span>`;
+      },
+    });
+    turnstileWidgetReady = true;
+    resultEl.textContent = "";
+  };
+  if (typeof turnstile !== "undefined") run();
+  else turnstile.ready(run);
+}
+
+async function setupTurnstile() {
+  try {
+    const cfg = await (await fetch("/api/chat/config")).json();
+    turnstileEnabled = !!cfg.turnstile_enabled;
+    turnstileSiteKey = cfg.turnstile_site_key || null;
+    startTurnstileWidget();
+  } catch (e) {
+    turnstileEnabled = false;
+    btn.disabled = false;
+  }
+}
+
+async function accept() {
+  btn.disabled = true;
+  resultEl.textContent = "Confirmando…";
+
+  let turnstileToken = null;
+  if (turnstileEnabled) {
+    if (!turnstileWidgetReady || turnstileWidgetId === null || typeof turnstile === "undefined") {
+      startTurnstileWidget();
+      resultEl.innerHTML = `<span class="err">Aguarde o widget Cloudflare carregar abaixo e marque a verificacao.</span>`;
+      btn.disabled = true;
+      return;
+    }
+    turnstileToken = turnstile.getResponse(turnstileWidgetId);
+    if (!turnstileToken) {
+      turnstileSection.classList.remove("hidden");
+      resultEl.innerHTML = `<span class="err">Complete a verificação Cloudflare acima antes de confirmar.</span>`;
+      btn.disabled = false;
+      return;
+    }
+  }
+
+  try {
+    const resp = await fetch(`/api/chat/leave/accept/${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnstile_token: turnstileToken }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      resultEl.innerHTML = `<span class="ok">${data.message}</span>`;
+      document.getElementById("title").textContent = "Saída confirmada";
+      document.getElementById("subtitle").textContent = "Pode fechar esta página e voltar ao chat no site.";
+      btn.style.display = "none";
+      turnstileSection.classList.add("hidden");
+    } else {
+      resultEl.innerHTML = `<span class="err">${data.message || data.detail || "Nao foi possivel confirmar."}</span>`;
+      if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
+        turnstile.reset(turnstileWidgetId);
+        turnstileTokenReady = false;
+        btn.disabled = true;
+      } else {
+        btn.disabled = false;
+      }
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<span class="err">Erro de conexao. Tente novamente.</span>`;
+    btn.disabled = false;
+  }
+}
+
+if (!token || token.length < 16) {
+  document.getElementById("title").textContent = "Link invalido";
+  document.getElementById("subtitle").textContent = "Volte ao chat no site e solicite sair do grupo novamente.";
+  btn.style.display = "none";
+} else {
+  setupTurnstile();
+  btn.addEventListener("click", accept);
+}
+</script>
+</body>
+</html>
