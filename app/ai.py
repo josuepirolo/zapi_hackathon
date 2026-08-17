@@ -189,21 +189,11 @@ def news_image_public_url(news_id: str) -> str:
 
 
 def news_image_mcp_url(news_id: str) -> str | None:
-    """URL limpa para send-image — Z-API rejeita query string (?v=) com 400."""
+    """URL limpa para send-image — so link, sem query string nem base64."""
     path = _find_news_image_path(news_id)
     if path is None:
         return None
     return f"{PUBLIC_BASE_URL}/assets/news/{path.name}"
-
-
-def news_image_data_uri(news_id: str) -> str | None:
-    """Base64 com prefixo data: — fallback se fetch da URL falhar no Z-API."""
-    path = _find_news_image_path(news_id)
-    if path is None:
-        return None
-    raw = base64.b64encode(path.read_bytes()).decode("ascii")
-    mime = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
-    return f"data:{mime};base64,{raw}"
 
 
 async def ensure_news_image_file(news_id: str, prompt: str) -> bool:

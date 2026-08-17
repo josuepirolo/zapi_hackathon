@@ -41,7 +41,7 @@ Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
 
 ### Imagem da notícia (upload manual)
 
-O MCP rejeita `send-image` com base64 grande (`413 Request Entity Too Large`). O app envia a **URL pública** (`.../assets/news/zapi-mcp-intro.jpg?v=...`). Uploads são **comprimidos** (max 1024px, JPEG ~100KB).
+O MCP aceita **link publico** no `send-image` (sem base64). URL enviada: `.../assets/news/zapi-mcp-intro.jpg` (sem `?v=`). Uploads comprimidos (~100KB JPEG).
 
 ```bash
 # Depois do deploy — substitua SECRET pelo WEBHOOK_SHARED_SECRET do .env
