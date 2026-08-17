@@ -677,6 +677,10 @@ function openChat() {
     } catch (err) {
       /* segue fluxo normal */
     }
+    if (consentData.status !== "accepted") {
+      sessionStorage.removeItem("delega_consent_done");
+      consentAcceptedHintShown = false;
+    }
     const alreadyInGroup = consentData.status === "accepted";
 
     await checkExistingHumanVerification();
@@ -792,6 +796,12 @@ async function send() {
     if (data.session_id) {
       browserSessionId = data.session_id;
       localStorage.setItem("delega_chat_session", browserSessionId);
+    }
+    if data.consent_status === "accepted") {
+      sessionStorage.setItem("delega_consent_done", "1");
+    } else if (data.consent_status === "removed" || data.consent_status === "none") {
+      sessionStorage.removeItem("delega_consent_done");
+      consentAcceptedHintShown = false;
     }
     if (data.consent_status === "accepted") {
       handleConsentAccepted({ message: data.reply, tools_used: data.tools_used || [] });
