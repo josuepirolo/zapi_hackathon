@@ -69,7 +69,7 @@ async def serve_news_asset(filename: str) -> FileResponse:
     return FileResponse(
         path,
         media_type=media_type,
-        headers={"Cache-Control": "no-cache, must-revalidate"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
 
 

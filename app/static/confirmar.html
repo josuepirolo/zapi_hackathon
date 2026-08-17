@@ -19,12 +19,6 @@
   }
   h1 { margin: 0 0 12px; font-size: 1.4rem; }
   p { color: var(--muted); line-height: 1.5; margin: 0 0 24px; }
-  #turnstile-box { display: flex; justify-content: center; margin-bottom: 16px; min-height: 65px; }
-  .turnstile-section { margin-bottom: 8px; }
-  .turnstile-hint {
-    font-size: 0.85rem; color: var(--muted); margin: 0 0 12px; line-height: 1.4;
-  }
-  .turnstile-section.hidden { display: none; }
   button {
     width: 100%; border: none; background: var(--accent); color: #fff; font-weight: 700;
     font-size: 1rem; padding: 14px 16px; border-radius: 12px; cursor: pointer;
@@ -34,16 +28,11 @@
   .ok { color: var(--accent); font-weight: 600; }
   .err { color: #b42318; font-weight: 600; }
 </style>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
 <div class="card">
   <h1 id="title">Confirmar entrada</h1>
   <p id="subtitle">Toque abaixo para confirmar que deseja entrar no grupo Tech News IA & MCP no WhatsApp.</p>
-  <div class="turnstile-section hidden" id="turnstile-section">
-    <p class="turnstile-hint" id="turnstile-hint">Complete a verificação de segurança abaixo antes de confirmar.</p>
-    <div id="turnstile-box"></div>
-  </div>
   <button type="button" id="confirm-btn">Confirmar minha entrada</button>
   <div class="result" id="result"></div>
 </div>
@@ -51,96 +40,15 @@
 const token = location.pathname.split("/").filter(Boolean).pop() || "";
 const btn = document.getElementById("confirm-btn");
 const resultEl = document.getElementById("result");
-const turnstileSection = document.getElementById("turnstile-section");
-let turnstileEnabled = false;
-let turnstileSiteKey = null;
-let turnstileWidgetId = null;
-let turnstileTokenReady = false;
-let turnstileWidgetReady = false;
-
-function startTurnstileWidget() {
-  if (!turnstileEnabled || !turnstileSiteKey) {
-    turnstileSection.classList.add("hidden");
-    btn.disabled = false;
-    turnstileWidgetReady = true;
-    return;
-  }
-  turnstileSection.classList.remove("hidden");
-  btn.disabled = true;
-  turnstileTokenReady = false;
-  turnstileWidgetReady = false;
-  resultEl.innerHTML = `<span class="muted" style="color:var(--muted);font-size:0.9rem;">Carregando verificacao Cloudflare…</span>`;
-  const run = () => {
-    if (turnstileWidgetId !== null) return;
-    turnstileWidgetId = turnstile.render("#turnstile-box", {
-      sitekey: turnstileSiteKey,
-      theme: "light",
-      size: "normal",
-      callback: () => {
-        turnstileTokenReady = true;
-        btn.disabled = false;
-        resultEl.textContent = "";
-      },
-      "expired-callback": () => {
-        turnstileTokenReady = false;
-        btn.disabled = true;
-        resultEl.innerHTML = `<span class="err">Verificacao expirou. Marque o Cloudflare de novo.</span>`;
-        if (turnstileWidgetId !== null && typeof turnstile !== "undefined") {
-          turnstile.reset(turnstileWidgetId);
-        }
-      },
-      "error-callback": () => {
-        turnstileTokenReady = false;
-        turnstileWidgetReady = false;
-        btn.disabled = true;
-        resultEl.innerHTML = `<span class="err">Falha ao carregar Cloudflare. Recarregue a pagina ou tente em outro navegador.</span>`;
-      },
-    });
-    turnstileWidgetReady = true;
-    resultEl.textContent = "";
-  };
-  if (typeof turnstile !== "undefined") run();
-  else turnstile.ready(run);
-}
-
-async function setupTurnstile() {
-  try {
-    const cfg = await (await fetch("/api/chat/config")).json();
-    turnstileEnabled = !!cfg.turnstile_enabled;
-    turnstileSiteKey = cfg.turnstile_site_key || null;
-    startTurnstileWidget();
-  } catch (e) {
-    turnstileEnabled = false;
-    btn.disabled = false;
-  }
-}
 
 async function accept() {
   btn.disabled = true;
   resultEl.textContent = "Confirmando…";
-
-  let turnstileToken = null;
-  if (turnstileEnabled) {
-    if (!turnstileWidgetReady || turnstileWidgetId === null || typeof turnstile === "undefined") {
-      startTurnstileWidget();
-      resultEl.innerHTML = `<span class="err">Aguarde o widget Cloudflare carregar abaixo e marque a verificacao.</span>`;
-      btn.disabled = true;
-      return;
-    }
-    turnstileToken = turnstile.getResponse(turnstileWidgetId);
-    if (!turnstileToken) {
-      turnstileSection.classList.remove("hidden");
-      resultEl.innerHTML = `<span class="err">Complete a verificação Cloudflare acima antes de confirmar.</span>`;
-      btn.disabled = false;
-      return;
-    }
-  }
-
   try {
     const resp = await fetch(`/api/chat/consent/accept/${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ turnstile_token: turnstileToken }),
+      body: "{}",
     });
     const data = await resp.json();
     if (data.ok) {
@@ -148,16 +56,9 @@ async function accept() {
       document.getElementById("title").textContent = "Tudo certo!";
       document.getElementById("subtitle").textContent = "Pode fechar esta pagina e voltar ao chat no site.";
       btn.style.display = "none";
-      turnstileSection.classList.add("hidden");
     } else {
       resultEl.innerHTML = `<span class="err">${data.message || data.detail || "Nao foi possivel confirmar."}</span>`;
-      if (turnstileEnabled && turnstileWidgetId !== null && typeof turnstile !== "undefined") {
-        turnstile.reset(turnstileWidgetId);
-        turnstileTokenReady = false;
-        btn.disabled = true;
-      } else {
-        btn.disabled = false;
-      }
+      btn.disabled = false;
     }
   } catch (e) {
     resultEl.innerHTML = `<span class="err">Erro de conexao. Tente novamente.</span>`;
@@ -170,7 +71,6 @@ if (!token || token.length < 16) {
   document.getElementById("subtitle").textContent = "Solicite um novo convite pelo chat no site.";
   btn.style.display = "none";
 } else {
-  setupTurnstile();
   btn.addEventListener("click", accept);
 }
 </script>

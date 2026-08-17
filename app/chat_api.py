@@ -121,7 +121,7 @@ class ConsentPollResponse(BaseModel):
 
 
 class ConsentAcceptRequest(BaseModel):
-    turnstile_token: str | None = Field(default=None, max_length=4096)
+    """Corpo opcional — Turnstile so no chat /promocoes, nao nas paginas de confirmacao."""
 
 
 class ConsentAcceptResponse(BaseModel):
@@ -224,11 +224,10 @@ async def poll_chat_consent(
 async def accept_chat_consent(
     token: str,
     request: Request,
-    body: ConsentAcceptRequest = ConsentAcceptRequest(),
+    body: ConsentAcceptRequest | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> ConsentAcceptResponse:
     _rate_limit_or_429(request, "chat_accept", CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE)
-    await _verify_turnstile_token(request, body.turnstile_token)
 
     token = token.strip()
     if not token or len(token) > 128:
@@ -241,11 +240,10 @@ async def accept_chat_consent(
 async def accept_chat_leave(
     token: str,
     request: Request,
-    body: ConsentAcceptRequest = ConsentAcceptRequest(),
+    body: ConsentAcceptRequest | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> ConsentAcceptResponse:
     _rate_limit_or_429(request, "chat_leave_accept", CHAT_ACCEPT_RATE_LIMIT_PER_MINUTE)
-    await _verify_turnstile_token(request, body.turnstile_token)
 
     token = token.strip()
     if not token or len(token) > 128:

@@ -179,13 +179,31 @@ async def _write_news_image(news_id: str, content: bytes) -> Path:
 
 
 def news_image_public_url(news_id: str) -> str:
-    """URL publica servida por GET /assets/news/{id}.jpg — Z-API send-image aceita link."""
+    """URL publica (com ?v= para bust de cache no browser)."""
     path = _find_news_image_path(news_id)
     safe_id = _sanitize_news_id(news_id)
     if path is None:
         return f"{PUBLIC_BASE_URL}/assets/news/{safe_id}.jpg"
-    filename = path.name
-    return f"{PUBLIC_BASE_URL}/assets/news/{filename}?v={int(path.stat().st_mtime)}"
+    base = f"{PUBLIC_BASE_URL}/assets/news/{path.name}"
+    return f"{base}?v={int(path.stat().st_mtime)}"
+
+
+def news_image_mcp_url(news_id: str) -> str | None:
+    """URL limpa para send-image — Z-API rejeita query string (?v=) com 400."""
+    path = _find_news_image_path(news_id)
+    if path is None:
+        return None
+    return f"{PUBLIC_BASE_URL}/assets/news/{path.name}"
+
+
+def news_image_data_uri(news_id: str) -> str | None:
+    """Base64 com prefixo data: — fallback se fetch da URL falhar no Z-API."""
+    path = _find_news_image_path(news_id)
+    if path is None:
+        return None
+    raw = base64.b64encode(path.read_bytes()).decode("ascii")
+    mime = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+    return f"data:{mime};base64,{raw}"
 
 
 async def ensure_news_image_file(news_id: str, prompt: str) -> bool:
@@ -215,9 +233,9 @@ async def ensure_news_image_file(news_id: str, prompt: str) -> bool:
 
 
 async def resolve_news_image_url(news_id: str, prompt: str) -> str | None:
-    """Retorna URL publica da imagem se existir ou puder ser gerada."""
+    """Retorna URL limpa para MCP se existir ou puder ser gerada."""
     if await ensure_news_image_file(news_id, prompt):
-        return news_image_public_url(news_id)
+        return news_image_mcp_url(news_id)
     return None
 
 
