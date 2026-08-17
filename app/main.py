@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 
 from app import mcp_client
 from app.admin_api import router as admin_router
@@ -53,9 +53,8 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/assets/news/{filename}")
-async def serve_news_asset(filename: str) -> FileResponse:
-    """Imagem publica para Z-API `send-image` via URL (evita 413 com base64 no MCP)."""
+def _news_asset_path(filename: str) -> tuple[Path, str]:
+    """Valida nome e retorna (path, media_type) ou levanta 404."""
     allowed = (".png", ".jpg", ".jpeg")
     if not any(filename.endswith(ext) for ext in allowed) or filename.count(".") != 1:
         raise HTTPException(status_code=404, detail="Nao encontrado")
@@ -66,11 +65,24 @@ async def serve_news_asset(filename: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Nao encontrado")
     media_type = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
-    return FileResponse(
-        path,
-        media_type=media_type,
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-    )
+    return path, media_type
+
+
+@app.api_route("/assets/news/{filename}", methods=["GET", "HEAD"])
+async def serve_news_asset(filename: str, request: Request) -> FileResponse | Response:
+    """Imagem publica para Z-API `send-image` via URL. HEAD evita 400 no fetch do Z-API."""
+    path, media_type = _news_asset_path(filename)
+    cache_headers = {"Cache-Control": "no-store, no-cache, must-revalidate"}
+    if request.method == "HEAD":
+        return Response(
+            status_code=200,
+            headers={
+                **cache_headers,
+                "Content-Type": media_type,
+                "Content-Length": str(path.stat().st_size),
+            },
+        )
+    return FileResponse(path, media_type=media_type, headers=cache_headers)
 
 
 @app.get("/tools-usage")
