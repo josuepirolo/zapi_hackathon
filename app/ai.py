@@ -113,7 +113,13 @@ def _news_image_path(news_id: str) -> Path:
 
 def news_image_public_url(news_id: str) -> str:
     """URL publica servida por GET /assets/news/{id}.png — Z-API send-image aceita link."""
-    return f"{PUBLIC_BASE_URL}/assets/news/{_sanitize_news_id(news_id)}.png"
+    safe_id = _sanitize_news_id(news_id)
+    base = f"{PUBLIC_BASE_URL}/assets/news/{safe_id}.png"
+    path = _news_image_path(news_id)
+    if path.is_file():
+        # ?v= evita CDN servir PNG antigo apos upload (Cloudflare cacheia URL sem query).
+        return f"{base}?v={int(path.stat().st_mtime)}"
+    return base
 
 
 async def ensure_news_image_file(news_id: str, prompt: str) -> bool:

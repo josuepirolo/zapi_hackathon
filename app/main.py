@@ -64,7 +64,11 @@ async def serve_news_asset(filename: str) -> FileResponse:
     path = NEWS_ASSETS_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Nao encontrado")
-    return FileResponse(path, media_type="image/png")
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/tools-usage")
