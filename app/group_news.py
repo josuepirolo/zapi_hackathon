@@ -18,16 +18,22 @@ logger = logging.getLogger("delega.group_news")
 
 
 async def _verify_public_image_url(url: str) -> bool:
-    """Confere se a URL responde 200 antes do Z-API tentar baixar."""
+    """Confere se a URL responde 200 (GET e HEAD) antes do Z-API tentar baixar."""
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-        content_type = (resp.headers.get("content-type") or "").lower()
-        if resp.status_code == 200 and content_type.startswith("image/"):
+            head = await client.head(url)
+            if head.status_code == 200:
+                content_type = (head.headers.get("content-type") or "").lower()
+                if content_type.startswith("image/"):
+                    return True
+            get = await client.get(url)
+        content_type = (get.headers.get("content-type") or "").lower()
+        if get.status_code == 200 and content_type.startswith("image/"):
             return True
         logger.warning(
-            "URL da imagem inacessivel (status=%s type=%s url=%s)",
-            resp.status_code,
+            "URL da imagem inacessivel (head=%s get=%s type=%s url=%s)",
+            head.status_code,
+            get.status_code,
             content_type or "—",
             url,
         )
