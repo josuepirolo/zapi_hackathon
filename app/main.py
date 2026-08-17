@@ -68,8 +68,8 @@ def _news_asset_path(filename: str) -> tuple[Path, str]:
     return path, media_type
 
 
-@app.api_route("/assets/news/{filename}", methods=["GET", "HEAD"])
-async def serve_news_asset(filename: str, request: Request) -> FileResponse | Response:
+@app.api_route("/assets/news/{filename}", methods=["GET", "HEAD"], response_model=None)
+async def serve_news_asset(filename: str, request: Request):
     """Imagem publica para Z-API `send-image` via URL. HEAD evita 400 no fetch do Z-API."""
     path, media_type = _news_asset_path(filename)
     cache_headers = {"Cache-Control": "no-store, no-cache, must-revalidate"}
