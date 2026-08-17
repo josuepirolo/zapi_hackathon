@@ -12,6 +12,14 @@ _sdds_private/
 .claude/
 .agents/
 .cursor/
+.claudeignore
+.cursorignore
+.github/copilot-instructions.md
+AGENTS.md
+CLAUDE.md
+CONTEXT_UPDATED.md
+CONTEXTO_HACKATHON_FINAL.md
+app/CLAUDE.md
 
 # logs e Debug
 logs/
