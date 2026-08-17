@@ -1,42 +1,30 @@
-"""Agente de chat publico: OpenAI + tools MCP Z-API oficial.
+"""Agente de chat publico /promocoes — roteiro deterministico + consentimento trackeado.
 
-Demonstracao hackathon — visitante conversa na pagina; a IA decide quando
-chamar cada uma das 9 tools via `app.mcp_client`.
+Sem OpenAI no chat (economia de tokens): onboarding fixo (nome → interesse → telefone),
+link WhatsApp via `start_tracked_consent`, news no grupo via backend/MCP.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
 
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import mcp_client
 from app.campaign_defaults import (
-    INVITATION_MESSAGE,
+    DEMO_FINISHED_MESSAGE,
+    DEMO_SCOPE_ONLY_MESSAGE,
     POST_JOIN_CHAT_MESSAGE,
-    TRIGGER_KEYWORD,
-    WELCOME_MESSAGE,
 )
 from app.chat_consent import (
-    get_accepted_consent_session,
     has_accepted_chat_consent,
     start_tracked_consent,
     try_leave_group_from_chat,
 )
-from app.config import OPENAI_API_KEY, OPENAI_MODEL
-from app.models import Campaign
+from app.phone_mask import mask_phone_digits
 
 logger = logging.getLogger("delega.chat_agent")
-
-_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-_MAX_TOOL_ROUNDS = 8
 
 
 @dataclass
@@ -45,104 +33,14 @@ class ChatTurnResult:
     tools_used: list[str]
     consent_status: str = "none"
 
-# Schemas alinhados ao MCP Z-API (docs/zapi-mcp-capabilities.md).
-_MCP_OPENAI_TOOL_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "send-text",
-            "description": "Envia mensagem de texto para um numero ou grupo WhatsApp via MCP Z-API.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {"type": "string", "description": "Telefone DDI+DDD+numero ou ID do grupo."},
-                    "message": {"type": "string", "description": "Texto da mensagem."},
-                },
-                "required": ["phone", "message"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "send-image",
-            "description": "Envia imagem (URL ou base64) com legenda opcional via MCP Z-API.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phone": {"type": "string"},
-                    "image": {"type": "string", "description": "URL publica ou base64."},
-                    "caption": {"type": "string"},
-                },
-                "required": ["phone", "image"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-create",
-            "description": "Cria grupo WhatsApp com participantes iniciais. Requer pelo menos um telefone real (nao vazio).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "groupName": {"type": "string"},
-                    "phones": {"type": "array", "items": {"type": "string"}},
-                    "autoInvite": {"type": "boolean", "description": "Enviar convite privado se necessario."},
-                },
-                "required": ["groupName", "phones", "autoInvite"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-metadata",
-            "description": "Consulta metadados do grupo (nome, participantes) via MCP Z-API.",
-            "parameters": {
-                "type": "object",
-                "properties": {"groupId": {"type": "string"}},
-                "required": ["groupId"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "group-add-participant",
-            "description": "Adiciona participante(s) a um grupo existente.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "groupId": {"type": "string"},
-                    "phones": {"type": "array", "items": {"type": "string"}},
-                    "autoInvite": {"type": "boolean"},
-                },
-                "required": ["groupId", "phones", "autoInvite"],
-            },
-        },
-    },
-]
-
-# Demo /promocoes: sem video/admin; saida do grupo e fluxo deterministico no backend.
-_CHAT_MCP_TOOL_NAMES = {
-    "send-text",
-    "send-image",
-    "group-create",
-    "group-metadata",
-    "group-add-participant",
-}
-MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
-    tool for tool in _MCP_OPENAI_TOOL_DEFINITIONS if tool["function"]["name"] in _CHAT_MCP_TOOL_NAMES
-]
-
-
-async def _latest_campaign(session: AsyncSession) -> Campaign | None:
-    result = await session.execute(select(Campaign).order_by(Campaign.id.desc()).limit(1))
-    return result.scalar_one_or_none()
-
 
 _PHONE_RE = re.compile(r"(?:\+?\d[\d\s().-]{8,}\d|\d{10,13})")
+_ASK_INTEREST_RE = re.compile(
+    r"\b(participar|sim ou nao|sim ou não|novidade|z-api|mcp)\b", re.IGNORECASE
+)
+_ASK_PHONE_RE = re.compile(r"\b(whatsapp|ddi|telefone|numero|número)\b", re.IGNORECASE)
+_YES_RE = re.compile(r"\b(sim|quero|pode|ok|okay|bora|vamos|tenho interesse)\b", re.IGNORECASE)
+_NO_RE = re.compile(r"\b(nao|não|agora nao|agora não|depois|prefiro nao|prefiro não)\b", re.IGNORECASE)
 _CONFIRM_RE = re.compile(
     r"\b(sim|confirmo|confirmar|correto|certo|isso|pode|ok|okay|envia|envie|manda|mande)\b",
     re.IGNORECASE,
@@ -249,6 +147,46 @@ def _extract_name_from_history(history: list[dict[str, str]], user_message: str)
     return None
 
 
+def _try_deterministic_onboarding_reply(
+    history: list[dict[str, str]], user_message: str
+) -> str | None:
+    """Roteiro fixo da demo — sem OpenAI (economia de tokens)."""
+    text = user_message.strip()
+    last = _latest_assistant_text(history)
+
+    if _NAME_ASK_RE.search(last):
+        name = _extract_name_from_history(history, user_message)
+        if name:
+            return (
+                f"Prazer, {name}! Esta demo envia uma novidade sobre Z-API + MCP no seu WhatsApp. "
+                "Quer participar? Responda sim ou nao."
+            )
+        return "Me diga so seu primeiro nome (ex.: Maria) para comecarmos."
+
+    if _ASK_INTEREST_RE.search(last) or last.startswith("Prazer,"):
+        if _YES_RE.search(text):
+            return (
+                "Otimo! Informe seu WhatsApp com DDI (ex.: 5511999999999). "
+                "Confirmo o numero antes de enviar o link."
+            )
+        if _NO_RE.search(text):
+            return (
+                "Sem problemas. Se quiser ver a novidade Z-API + MCP depois, "
+                "volte aqui e diga que quer participar."
+            )
+
+    phone = _extract_phone(text)
+    if phone and not _is_explicit_confirmation(text):
+        if _ASK_PHONE_RE.search(last) or "Confirma o numero" in last or "Informe seu WhatsApp" in last:
+            masked = mask_phone_digits(phone)
+            return (
+                f"Confirma o numero {masked}? "
+                "Responda sim para eu enviar o link de confirmacao no WhatsApp."
+            )
+
+    return None
+
+
 _POST_ONBOARDING_NOW_RE = re.compile(
     r"\b(e agora|e dai|e depois|proximo passo|what now|what next)\b", re.IGNORECASE
 )
@@ -260,92 +198,17 @@ _WHO_MADE_YOU_RE = re.compile(
 )
 _PROMPT_LEAK_RE = re.compile(r"\b(prompt|system prompt|instrucoes internas|regras internas)\b", re.IGNORECASE)
 
-_IDENTITY_REPLY = (
-    "Sou a assistente do Tech News nesta demo do Desafio MCP Z-API 2026. "
-    "Conduzo a conversa aqui no site com OpenAI; o Server MCP oficial da Z-API executa as acoes no WhatsApp."
-)
-_WHO_MADE_REPLY = (
-    "Esta assistente foi criada para a demonstracao do hackathon: conversa via OpenAI "
-    "e acoes reais no WhatsApp pelo Server MCP Z-API."
-)
 
-
-def _post_onboarding_quick_reply(user_message: str) -> str | None:
+def _post_onboarding_quick_reply(user_message: str) -> str:
+    """Pos-onboarding: sem OpenAI — respostas fixas ou encerramento da demo."""
     text = user_message.strip()
     if _PROMPT_LEAK_RE.search(text):
-        return (
-            "Nao posso compartilhar prompt ou detalhes internos. "
-            "Posso ajudar com IA, MCP, WhatsApp ou esta demo do Tech News."
-        )
-    if _WHO_MADE_YOU_RE.search(text):
-        return _WHO_MADE_REPLY
-    if _WHO_ARE_YOU_RE.search(text):
-        return _IDENTITY_REPLY
+        return DEMO_FINISHED_MESSAGE
+    if _WHO_MADE_YOU_RE.search(text) or _WHO_ARE_YOU_RE.search(text):
+        return DEMO_FINISHED_MESSAGE
     if _POST_ONBOARDING_NOW_RE.search(text):
         return POST_JOIN_CHAT_MESSAGE
-    return None
-
-
-def _build_system_prompt(
-    campaign: Campaign | None,
-    onboarding_complete: bool = False,
-    personal_group_line: str = "",
-) -> str:
-    if personal_group_line:
-        group_line = personal_group_line
-    elif campaign and campaign.whatsapp_group_id:
-        group_line = (
-            f"Grupo da campanha admin: groupId=`{campaign.whatsapp_group_id}`, nome `{campaign.name}`."
-        )
-    elif campaign:
-        group_line = (
-            f"Grupo da campanha admin: ainda nao — onboarding usa grupos pessoais `{campaign.name} #NNN`."
-        )
-    else:
-        group_line = "Grupo: onboarding cria grupos pessoais Tech News IA & MCP #NNN por visitante."
-    return f"""Voce e a assistente virtual do Tech News, demo ao vivo do Desafio MCP Z-API 2026.
-Stack desta demo: conversa conduzida por OpenAI; acoes no WhatsApp executadas pelo Server MCP oficial da Z-API.
-
-Contexto: informacao sobre IA, MCP e comunicacao inteligente existe demais, tempo pra acompanhar
-tudo e que falta. O Tech News leva as principais novidades sobre isso direto pro WhatsApp da pessoa.
-
-Objetivo: conversar de forma calorosa, explicar o beneficio do grupo de novidades Tech no WhatsApp
-e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente acoes).
-
-Fluxo sugerido:
-1. O site ja mandou as boas-vindas, o aviso de privacidade (LGPD) e perguntou o primeiro nome da
-   pessoa antes de voce entrar na conversa — a primeira mensagem que voce recebe do visitante e
-   essa resposta (o nome). Use-o pra se dirigir a pessoa dai em diante (ex.: "Prazer, Joao!").
-2. Pergunte se ela quer receber novidades sobre IA/MCP no WhatsApp.
-3. Se sim, peca o WhatsApp com DDI (ex.: 5511***9999) — confirme o numero antes de agir.
-4. Com telefone confirmado, o sistema envia automaticamente um link de confirmacao no WhatsApp.
-   A confirmacao e o visitante abrir esse link no celular — nao e codigo numerico nem SIM/NAO no privado.
-5. Enquanto o link nao for aberto, o chat no site fica aguardando (polling).
-6. Nunca diga que enviou link sem o backend ter disparado send-text.
-7. Voce nunca sabe, nesta etapa, se o numero ja faz parte do grupo ou e admin — so o backend
-   descobre isso depois que o link for clicado. Nunca especule sobre isso.
-
-Contexto fixo:
-- Palavra-chave opt-in alternativa: {TRIGGER_KEYWORD}
-- Mensagem tipo convite: {INVITATION_MESSAGE}
-- Boas-vindas no grupo: {WELCOME_MESSAGE}
-- {group_line}
-
-Regras:
-- Responda sempre em portugues do Brasil, frases curtas, tom profissional e amigavel.
-- Ao usar uma tool, diga na resposta final o que fez (ex.: "Enviei convite no WhatsApp").
-- Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
-- Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
-- Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos.
-- Para sair do grupo ou encerrar a demo, o visitante diz "quero sair do grupo" — o backend envia link de confirmacao no WhatsApp (igual a entrada) e so remove apos o clique. Nunca invente remocao.
-{"- Onboarding ja concluido: o visitante entrou no grupo pessoal acima. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
-
-
-def _tool_result_text(mcp_result: Any) -> str:
-    payload = mcp_client.parse_tool_payload(mcp_result) if isinstance(mcp_result, dict) else None
-    if payload is not None:
-        return json.dumps(payload, ensure_ascii=False)[:6000]
-    return json.dumps(mcp_result, ensure_ascii=False, default=str)[:6000]
+    return DEMO_FINISHED_MESSAGE
 
 
 async def run_chat_turn(
@@ -354,9 +217,7 @@ async def run_chat_turn(
     user_message: str,
     browser_session_id: str,
 ) -> ChatTurnResult:
-    """Executa um turno completo (pode incluir varias chamadas MCP)."""
-    campaign = await _latest_campaign(session)
-
+    """Executa um turno do chat publico (roteiro deterministico, sem OpenAI)."""
     confirmed_phone = _should_send_whatsapp_invite(history, user_message)
     if confirmed_phone:
         visitor_name = _extract_name_from_history(history, user_message)
@@ -373,106 +234,10 @@ async def run_chat_turn(
         return ChatTurnResult(reply=reply, tools_used=tools, consent_status=consent_status)
 
     if onboarding_complete:
-        quick = _post_onboarding_quick_reply(user_message)
-        if quick:
-            return ChatTurnResult(reply=quick, tools_used=[])
+        return ChatTurnResult(reply=_post_onboarding_quick_reply(user_message), tools_used=[])
 
-    personal_group_line = ""
-    if onboarding_complete:
-        record = await get_accepted_consent_session(session, browser_session_id)
-        if record and record.whatsapp_group_id:
-            personal_group_line = (
-                f"Grupo pessoal deste visitante: groupId=`{record.whatsapp_group_id}`, "
-                f"nome=`{record.group_name or 'Tech News IA & MCP'}`. "
-                "Use esse groupId em group-metadata, send-text/send-image no grupo, etc."
-            )
+    deterministic = _try_deterministic_onboarding_reply(history, user_message)
+    if deterministic:
+        return ChatTurnResult(reply=deterministic, tools_used=[])
 
-    messages: list[ChatCompletionMessageParam] = [
-        {
-            "role": "system",
-            "content": _build_system_prompt(campaign, onboarding_complete, personal_group_line),
-        },
-    ]
-    for item in history[-20:]:
-        role = item.get("role")
-        content = (item.get("content") or "").strip()
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": user_message})
-
-    tools_used: list[str] = []
-
-    for _ in range(_MAX_TOOL_ROUNDS):
-        try:
-            completion = await _client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=messages,
-                tools=MCP_OPENAI_TOOLS,
-                tool_choice="auto",
-                temperature=0.4,
-                max_tokens=800,
-            )
-        except Exception:
-            logger.exception("Falha OpenAI no chat publico")
-            return ChatTurnResult(
-                reply="Desculpe, nao consegui processar agora. Tente novamente em instantes.",
-                tools_used=tools_used,
-            )
-
-        choice = completion.choices[0].message
-
-        if choice.tool_calls:
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": choice.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments or "{}",
-                        },
-                    }
-                    for tc in choice.tool_calls
-                ],
-            }
-            messages.append(assistant_msg)  # type: ignore[arg-type]
-            for tool_call in choice.tool_calls:
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                logger.info("Chat MCP tool: %s args=%s", name, args)
-                try:
-                    result = await mcp_client.call_tool(name, args)
-                    if name == "group-create" and campaign and not campaign.whatsapp_group_id:
-                        group_id = mcp_client.extract_group_id(result)
-                        if group_id:
-                            campaign.whatsapp_group_id = group_id
-                            await session.commit()
-                    if mcp_client.tool_call_succeeded(result):
-                        tools_used.append(name)
-                    tool_content = _tool_result_text(result)
-                except Exception as exc:
-                    logger.exception("Falha MCP tool %s", name)
-                    tool_content = json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": tool_content,
-                    }
-                )
-            continue
-
-        reply = (choice.content or "").strip()
-        if not reply:
-            reply = "Como posso ajudar voce a entrar no nosso grupo de novidades sobre IA e MCP no WhatsApp?"
-        return ChatTurnResult(reply=reply, tools_used=tools_used)
-
-    return ChatTurnResult(
-        reply="Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
-        tools_used=tools_used,
-    )
+    return ChatTurnResult(reply=DEMO_SCOPE_ONLY_MESSAGE, tools_used=[])

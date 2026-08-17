@@ -57,6 +57,7 @@ curl -I "https://desafiozapi.py.tec.br/assets/news/zapi-mcp-intro.png"
 Se já existir PNG gerada pela OpenAI no volume, apague antes do upload: `rm -f data/news_assets/zapi-mcp-intro.png` na VM.
 
 Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie não é obrigatório.
+O chat `/promocoes` **não usa OpenAI** no roteiro (economia de tokens): respostas fixas para nome → interesse → telefone; após entrar no grupo, só mensagens de encerramento ou saída.
 Estado do link: SQLite (`chat_consent_sessions`), sem Redis.
 Telefones exibidos no chat são mascarados (`5544***9999`); o backend usa o número real só para MCP.
 Quem **já tem grupo pessoal** (`#NNN`) reconhecido pelo telefone (com/sem 9º dígito) conclui direto no chat, sem novo link.

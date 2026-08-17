@@ -61,9 +61,16 @@ GROUP_ACCESS_LINK_DM = (
 )
 
 POST_JOIN_CHAT_MESSAGE = (
-    "Abra seu WhatsApp agora — a novidade ja esta la. 📱 "
-    "Depois disso, pode me perguntar sobre IA, MCP ou esta demo."
+    "Abra seu WhatsApp agora — a novidade sobre Z-API + MCP ja esta no seu grupo. "
+    "Esta demo nao responde perguntas no chat; para sair, diga \"quero sair do grupo\"."
 )
+
+DEMO_SCOPE_ONLY_MESSAGE = (
+    "Esta pagina e so a demo Tech News: entrar no grupo e receber a novidade sobre Z-API + MCP. "
+    "Informe seu primeiro nome e WhatsApp para participar, ou diga \"quero sair do grupo\" se ja entrou."
+)
+
+DEMO_FINISHED_MESSAGE = POST_JOIN_CHAT_MESSAGE
 
 LEAVE_GROUP_ASK = (
     "Tem certeza que quer sair do grupo *{group_name}* e encerrar sua participacao nesta demo? "
