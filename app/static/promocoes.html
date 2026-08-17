@@ -399,10 +399,7 @@ function unlockChatAfterHuman() {
   setSecurityCheck(false);
   setSendEnabled(true);
   hideTurnstileSection();
-  if (!welcomedAfterVerify && !isConsentDoneMarked()) {
-    welcomedAfterVerify = true;
-    showWelcomeAndPrivacy("Agora sim! Sou a assistente do Tech News (novidades de IA e MCP).");
-  }
+  showWelcomeAndPrivacy("Agora sim! Sou a assistente do Tech News (novidades de IA e MCP).");
   resumeConsentIfNeeded();
   inputEl.focus();
 }
@@ -429,8 +426,27 @@ function startTurnstileWidget() {
       "expired-callback": onTurnstileExpired,
     });
   };
-  if (typeof turnstile !== "undefined") run();
-  else turnstile.ready(run);
+  if (typeof turnstile !== "undefined") {
+    run();
+    return;
+  }
+  // Script do CDN carrega com `async` (index.html/promocoes.html) - pode
+  // ainda nao existir quando chegamos aqui. Chamar `turnstile.ready(...)`
+  // numa variavel indefinida quebrava com ReferenceError e travava o
+  // widget pra sempre (achado real: usuario via a pagina "sem Turnstile").
+  // Poll curto ate o global aparecer, com teto pra nao rodar pra sempre.
+  let attempts = 0;
+  const waitForTurnstile = setInterval(() => {
+    attempts += 1;
+    if (typeof turnstile !== "undefined") {
+      clearInterval(waitForTurnstile);
+      run();
+    } else if (attempts >= 100) {
+      clearInterval(waitForTurnstile);
+      console.error("Turnstile nao carregou apos 10s.");
+      addAssistant("Não consegui carregar a verificação de segurança. Recarregue a página.", []);
+    }
+  }, 100);
 }
 
 function retryTurnstile() {
@@ -648,9 +664,14 @@ async function resumeConsentIfNeeded() {
 }
 
 function showWelcomeAndPrivacy(intro) {
-  if (isConsentWaitingMarked() || isConsentDoneMarked()) {
+  // Idempotente por design: `checkExistingHumanVerification()` pode chamar
+  // isso via `unlockChatAfterHuman()` (verificacao ja em cache no servidor,
+  // sem precisar do widget) ANTES de `openChat()` decidir se tambem chama -
+  // sem esse guard aqui dentro, as duas saudacoes apareciam duplicadas.
+  if (welcomedAfterVerify || isConsentWaitingMarked() || isConsentDoneMarked()) {
     return;
   }
+  welcomedAfterVerify = true;
   const privacy =
     "🔒 Sua privacidade importa. Vamos usar seu WhatsApp só pra verificar seu acesso e realizar esta experiência de " +
     "demonstração — seus dados não são compartilhados e você pode encerrar sua participação quando quiser.";

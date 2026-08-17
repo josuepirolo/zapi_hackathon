@@ -1,7 +1,7 @@
 """Publicacao da novidade do dia no grupo via MCP.
 
-Texto via `send-text` (funciona). `send-image` desligado por ora - ver
-`NEWS_SEND_IMAGE_ENABLED` abaixo.
+Tenta `send-image` e sempre manda `send-text` depois, imagem funcionando ou
+nao - ver `NEWS_SEND_IMAGE_ENABLED` abaixo.
 """
 
 from __future__ import annotations
@@ -16,15 +16,18 @@ from app.news_content import DEFAULT_GROUP_NEWS
 
 logger = logging.getLogger("delega.group_news")
 
-# `send-image` via MCP confirmado quebrado nesta instancia Z-API (2026-08-17):
-# testado ao vivo e exaustivamente (URL propria, URL externa conhecida,
-# grupo, numero direto, com/sem caption, base64 minusculo) - sempre "Request
-# failed with status code 400", enquanto `send-text` funciona normalmente na
-# mesma sessao/instancia. Payload confere com o schema live (`list_tools()`),
-# entao nao e erro nosso - bug/limitacao do lado da Z-API. Decisao do
-# usuario: noticia so em texto por enquanto. Reativar mudando este flag para
-# True se a Z-API corrigir.
-NEWS_SEND_IMAGE_ENABLED = False
+# `send-image` via MCP deu erro consistente nesta instancia Z-API em
+# 2026-08-17 (testado exaustivamente: URL propria, URL externa conhecida,
+# grupo, numero direto, com/sem caption, base64 minusculo - sempre "Request
+# failed with status code 400", enquanto `send-text` funcionava normalmente
+# na mesma sessao/instancia). Payload conferia com o schema live
+# (`list_tools()`), entao nao era erro nosso - parecia bug/limitacao do lado
+# da Z-API. Deixado LIGADO de novo (decisao do usuario 2026-08-17): a Z-API
+# pode corrigir a qualquer momento e o bloco abaixo ja e resiliente - falha
+# aqui nunca impede o `send-text` de rodar depois (blocos sequenciais, nao
+# aninhados). Só desligar de novo (False) se voltar a falhar e quiser
+# economizar a chamada.
+NEWS_SEND_IMAGE_ENABLED = True
 
 
 async def _verify_public_image_url(url: str) -> bool:
