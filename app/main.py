@@ -13,10 +13,9 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from app import mcp_client
-from app.admin_api import router as admin_router
 from app.chat_api import router as chat_router
 from app.config import NEWS_ASSETS_DIR
 from app.db import init_models
@@ -43,7 +42,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="DELEGA - Gestao de Grupo de WhatsApp com Consentimento", lifespan=lifespan)
 app.include_router(webhook_router)
-app.include_router(admin_router)
 app.include_router(chat_router)
 app.include_router(news_assets_router)
 
@@ -94,8 +92,11 @@ async def tools_usage() -> dict[str, bool]:
 
 
 @app.get("/")
-async def panel() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+async def root() -> RedirectResponse:
+    # Painel admin sem autenticacao ficaria exposto durante os dias de
+    # avaliacao publica do desafio - desligado (ver app/admin_api.py, que
+    # nao e mais registrado em app.include_router). Raiz manda pra demo real.
+    return RedirectResponse(url="/promocoes")
 
 
 @app.get("/participar")
