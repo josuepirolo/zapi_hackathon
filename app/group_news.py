@@ -1,4 +1,8 @@
-"""Publicacao da novidade do dia no grupo via MCP (`send-image` + legenda)."""
+"""Publicacao da novidade do dia no grupo via MCP.
+
+Envio em duas etapas (mais confiavel no WhatsApp): `send-image` sem legenda,
+depois `send-text` com o texto completo da noticia.
+"""
 
 from __future__ import annotations
 
@@ -11,25 +15,46 @@ from app.news_content import DEFAULT_GROUP_NEWS
 logger = logging.getLogger("delega.group_news")
 
 
-async def send_group_news(group_id: str) -> None:
-    """Primeira news do dia: imagem cacheada + legenda com link Z-API MCP."""
+async def send_group_news(group_id: str) -> list[str]:
+    """Publica a news do dia. Retorna as tools MCP efetivamente usadas."""
     news = DEFAULT_GROUP_NEWS
+    tools_used: list[str] = []
+
     image_b64 = await get_cached_news_image_base64(news.id, news.image_prompt)
-    if image_b64 is None:
-        logger.warning("Falha ao obter imagem da noticia %s - fallback send-text no grupo.", news.id)
+    if image_b64 is not None:
         try:
-            await mcp_client.call_tool("send-text", {"phone": group_id, "message": news.caption})
+            result = await mcp_client.call_tool(
+                "send-image",
+                {"phone": group_id, "image": image_b64},
+            )
+            if mcp_client.tool_call_succeeded(result):
+                tools_used.append("send-image")
+            else:
+                logger.warning(
+                    "send-image recusou noticia %s no grupo %s: %r",
+                    news.id,
+                    group_id,
+                    result,
+                )
         except Exception:
-            logger.exception("Falha no fallback send-text da noticia no grupo %s", group_id)
-        return
+            logger.exception("Falha send-image da noticia no grupo %s", group_id)
+    else:
+        logger.warning("Falha ao obter imagem da noticia %s — so legenda via send-text.", news.id)
+
     try:
-        await mcp_client.call_tool(
-            "send-image",
-            {"phone": group_id, "image": image_b64, "caption": news.caption},
+        result = await mcp_client.call_tool(
+            "send-text",
+            {"phone": group_id, "message": news.caption},
         )
+        if mcp_client.tool_call_succeeded(result):
+            tools_used.append("send-text")
+        else:
+            logger.warning(
+                "send-text da noticia recusou no grupo %s: %r",
+                group_id,
+                result,
+            )
     except Exception:
-        logger.exception("Falha ao enviar imagem da noticia via MCP no grupo %s", group_id)
-        try:
-            await mcp_client.call_tool("send-text", {"phone": group_id, "message": news.caption})
-        except Exception:
-            logger.exception("Falha no fallback send-text da noticia no grupo %s", group_id)
+        logger.exception("Falha send-text da noticia no grupo %s", group_id)
+
+    return tools_used

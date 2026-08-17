@@ -98,9 +98,8 @@ async def interpret_confirmation(texto: str) -> Confirmation:
     return raw  # type: ignore[return-value]
 
 
-# Confirmado contra doc oficial OpenAI (2026-08-13): modelos GPT Image
-# (`gpt-image-*`) sempre retornam base64 em `data[].b64_json` — o parametro
-# `response_format` so vale para dall-e-2/3 e gera 400 se enviado aqui.
+# Confirmado contra doc oficial OpenAI (2026-08-16): `gpt-image-2` exige
+# >= 655360 pixels — `512x512` retorna 400 "below minimum pixel budget".
 _IMAGE_MODEL = "gpt-image-2"
 
 
@@ -114,7 +113,7 @@ async def _generate_image_base64(prompt: str) -> str | None:
         result = await _client.images.generate(
             model=_IMAGE_MODEL,
             prompt=prompt,
-            size="512x512",
+            size="1024x1024",
             quality="low",
         )
         b64 = result.data[0].b64_json
