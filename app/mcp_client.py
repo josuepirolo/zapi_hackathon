@@ -306,8 +306,8 @@ def _br_phone_variants(digits: str) -> set[str]:
     """Numero movel brasileiro pode aparecer com ou sem o 9o digito
     (DDI+DDD+9+8digitos = 13 digitos, ou DDI+DDD+8digitos = 12) - mesmo
     numero fisico, formatos diferentes. Achado real 2026-08-16: o
-    `owner` do `group-metadata` veio sem o 9 (554498094320), enquanto o
-    numero digitado/configurado costuma vir com (5544998094320) - sem
+    `owner` do `group-metadata` veio sem o 9 (ex.: 554498887777), enquanto o
+    numero digitado/configurado costuma vir com (ex.: 5544998887777) - sem
     tolerar isso, a checagem de "ja e participante" erra pro dono/admin
     do proprio grupo. Gera as duas variantes pra comparar certo."""
     variants = {digits}
