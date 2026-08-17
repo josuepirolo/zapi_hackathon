@@ -11,12 +11,15 @@ modelo exato) e configuravel via variavel de ambiente sem mudar codigo.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
 from openai import AsyncOpenAI
+from PIL import Image
 
 from app.config import NEWS_ASSETS_DIR, OPENAI_API_KEY, OPENAI_MODEL, PUBLIC_BASE_URL
 
@@ -101,26 +104,101 @@ async def interpret_confirmation(texto: str) -> Confirmation:
 # Confirmado contra doc oficial OpenAI (2026-08-16): `gpt-image-2` exige
 # >= 655360 pixels — `512x512` retorna 400 "below minimum pixel budget".
 _IMAGE_MODEL = "gpt-image-2"
+_NEWS_IMAGE_MAX_PX = 1024
+_NEWS_IMAGE_JPEG_QUALITY = 82
 
 
 def _sanitize_news_id(news_id: str) -> str:
     return "".join(ch for ch in news_id if ch.isalnum() or ch in "-_")
 
 
-def _news_image_path(news_id: str) -> Path:
-    return NEWS_ASSETS_DIR / f"{_sanitize_news_id(news_id)}.png"
+def _news_image_path(news_id: str, ext: str = "jpg") -> Path:
+    return NEWS_ASSETS_DIR / f"{_sanitize_news_id(news_id)}.{ext}"
+
+
+def _find_news_image_path(news_id: str) -> Path | None:
+    safe = _sanitize_news_id(news_id)
+    for name in (f"{safe}.jpg", f"{safe}.jpeg", f"{safe}.png"):
+        path = NEWS_ASSETS_DIR / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _compress_news_image(content: bytes) -> tuple[bytes, str]:
+    """Redimensiona e comprime para JPEG leve (WhatsApp / fetch MCP)."""
+    original = len(content)
+    img = Image.open(BytesIO(content))
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    width, height = img.size
+    max_side = max(width, height)
+    if max_side > _NEWS_IMAGE_MAX_PX:
+        scale = _NEWS_IMAGE_MAX_PX / max_side
+        img = img.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=_NEWS_IMAGE_JPEG_QUALITY, optimize=True, progressive=True)
+    data = buf.getvalue()
+    logger.info(
+        "Imagem da noticia comprimida %d -> %d bytes (max %dpx, q=%d)",
+        original,
+        len(data),
+        _NEWS_IMAGE_MAX_PX,
+        _NEWS_IMAGE_JPEG_QUALITY,
+    )
+    return data, "jpg"
+
+
+def _remove_stale_news_images(news_id: str, keep_ext: str) -> None:
+    safe = _sanitize_news_id(news_id)
+    for ext in ("png", "jpg", "jpeg"):
+        if ext == keep_ext:
+            continue
+        path = NEWS_ASSETS_DIR / f"{safe}.{ext}"
+        if path.is_file():
+            path.unlink(missing_ok=True)
+
+
+async def _write_news_image(news_id: str, content: bytes) -> Path:
+    compressed, ext = await asyncio.to_thread(_compress_news_image, content)
+    _remove_stale_news_images(news_id, ext)
+    path = _news_image_path(news_id, ext)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(compressed)
+    return path
 
 
 def news_image_public_url(news_id: str) -> str:
-    """URL publica servida por GET /assets/news/{id}.png — Z-API send-image aceita link."""
-    return f"{PUBLIC_BASE_URL}/assets/news/{_sanitize_news_id(news_id)}.png"
+    """URL publica servida por GET /assets/news/{id}.jpg — Z-API send-image aceita link."""
+    path = _find_news_image_path(news_id)
+    safe_id = _sanitize_news_id(news_id)
+    if path is None:
+        return f"{PUBLIC_BASE_URL}/assets/news/{safe_id}.jpg"
+    filename = path.name
+    return f"{PUBLIC_BASE_URL}/assets/news/{filename}?v={int(path.stat().st_mtime)}"
 
 
 async def ensure_news_image_file(news_id: str, prompt: str) -> bool:
-    """Garante PNG no disco (cache local ou geracao OpenAI)."""
-    path = _news_image_path(news_id)
-    if path.is_file():
-        logger.info("Imagem da noticia %s carregada do cache (%s)", news_id, path)
+    """Garante imagem no disco (cache local comprimido ou geracao OpenAI)."""
+    existing = _find_news_image_path(news_id)
+    if existing is not None:
+        if existing.suffix.lower() == ".png":
+            try:
+                await _write_news_image(news_id, existing.read_bytes())
+            except OSError:
+                logger.exception("Falha ao recomprimir PNG legado da noticia %s", news_id)
+        else:
+            logger.info("Imagem da noticia %s carregada do cache", news_id)
         return True
 
     b64 = await _generate_image_base64(prompt)
@@ -128,12 +206,11 @@ async def ensure_news_image_file(news_id: str, prompt: str) -> bool:
         return False
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(base64.b64decode(b64))
+        path = await _write_news_image(news_id, base64.b64decode(b64))
         logger.info("Imagem da noticia %s gerada e salva em %s", news_id, path)
         return True
     except OSError:
-        logger.exception("Falha ao salvar cache da imagem %s em %s", news_id, path)
+        logger.exception("Falha ao salvar cache da imagem %s", news_id)
         return False
 
 
@@ -145,13 +222,16 @@ async def resolve_news_image_url(news_id: str, prompt: str) -> str | None:
 
 
 async def save_news_image_bytes(news_id: str, content: bytes) -> Path:
-    """Persiste PNG enviado manualmente (upload)."""
+    """Persiste imagem enviada manualmente (upload), comprimida para JPEG."""
     if len(content) > 5 * 1024 * 1024:
         raise ValueError("Imagem maior que 5 MB")
-    path = _news_image_path(news_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    logger.info("Imagem da noticia %s salva via upload em %s (%d bytes)", news_id, path, len(content))
+    path = await _write_news_image(news_id, content)
+    logger.info(
+        "Imagem da noticia %s salva via upload em %s (%d bytes)",
+        news_id,
+        path,
+        path.stat().st_size,
+    )
     return path
 
 
@@ -159,7 +239,10 @@ async def get_cached_news_image_base64(news_id: str, prompt: str) -> str | None:
     """Legado — preferir `resolve_news_image_url` (evita 413 no MCP com base64 grande)."""
     if not await ensure_news_image_file(news_id, prompt):
         return None
-    return base64.b64encode(_news_image_path(news_id).read_bytes()).decode("ascii")
+    path = _find_news_image_path(news_id)
+    if path is None:
+        return None
+    return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
 async def _generate_image_base64(prompt: str) -> str | None:

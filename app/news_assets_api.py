@@ -7,8 +7,8 @@ import logging
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.ai import news_image_public_url, save_news_image_bytes
-from app.config import NEWS_ASSETS_DIR, WEBHOOK_SHARED_SECRET
+from app.ai import news_image_public_url, save_news_image_bytes, _find_news_image_path
+from app.config import WEBHOOK_SHARED_SECRET
 from app.news_content import DEFAULT_GROUP_NEWS
 
 logger = logging.getLogger("delega.news_assets")
@@ -56,16 +56,19 @@ async def upload_news_asset(
 
     url = news_image_public_url(safe_id)
     logger.info("Upload news asset %s -> %s", safe_id, path)
-    return NewsAssetUploadResponse(ok=True, news_id=safe_id, url=url, bytes=len(raw))
+    return NewsAssetUploadResponse(
+        ok=True, news_id=safe_id, url=url, bytes=path.stat().st_size
+    )
 
 
 @router.get("/news-assets/{news_id}/info")
 async def news_asset_info(news_id: str) -> dict[str, str | bool]:
     safe_id = _validate_news_id(news_id)
-    path = NEWS_ASSETS_DIR / f"{safe_id}.png"
+    path = _find_news_image_path(safe_id)
     return {
         "news_id": safe_id,
-        "exists": path.is_file(),
+        "exists": path is not None,
         "url": news_image_public_url(safe_id),
+        "bytes": path.stat().st_size if path else 0,
         "default_id": DEFAULT_GROUP_NEWS.id,
     }

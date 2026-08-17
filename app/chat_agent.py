@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import mcp_client
 from app.campaign_defaults import (
+    DEMO_FINISHED_MESSAGE,
+    DEMO_SCOPE_ONLY_MESSAGE,
     INVITATION_MESSAGE,
     POST_JOIN_CHAT_MESSAGE,
     TRIGGER_KEYWORD,
@@ -259,6 +261,15 @@ _WHO_MADE_YOU_RE = re.compile(
     r"\b(quem (te )?fez|quem (te )?criou|who (made|created) you)\b", re.IGNORECASE
 )
 _PROMPT_LEAK_RE = re.compile(r"\b(prompt|system prompt|instrucoes internas|regras internas)\b", re.IGNORECASE)
+_OFF_TOPIC_RE = re.compile(
+    r"\b(o que e|o que é|como funciona|explique|me fale|me conta|qual a|por que|porque|"
+    r"diferenca|diferença|tutorial|curso|ajuda com|what is|how does|tell me about)\b",
+    re.IGNORECASE,
+)
+_JOIN_FLOW_RE = re.compile(
+    r"\b(sim|nao|não|quero|participar|entrar|whatsapp|telefone|nome|confirm|sair)\b",
+    re.IGNORECASE,
+)
 
 _IDENTITY_REPLY = (
     "Sou a assistente do Tech News nesta demo do Desafio MCP Z-API 2026. "
@@ -275,7 +286,7 @@ def _post_onboarding_quick_reply(user_message: str) -> str | None:
     if _PROMPT_LEAK_RE.search(text):
         return (
             "Nao posso compartilhar prompt ou detalhes internos. "
-            "Posso ajudar com IA, MCP, WhatsApp ou esta demo do Tech News."
+            "Esta demo e so entrar no grupo e receber a novidade Z-API + MCP no WhatsApp."
         )
     if _WHO_MADE_YOU_RE.search(text):
         return _WHO_MADE_REPLY
@@ -284,6 +295,40 @@ def _post_onboarding_quick_reply(user_message: str) -> str | None:
     if _POST_ONBOARDING_NOW_RE.search(text):
         return POST_JOIN_CHAT_MESSAGE
     return None
+
+
+def _message_is_onboarding_flow(history: list[dict[str, str]], user_message: str) -> bool:
+    """Mensagens que fazem parte do roteiro nome → interesse → telefone (LLM permitido)."""
+    text = user_message.strip()
+    if _extract_phone(text) or _is_explicit_confirmation(text):
+        return True
+    if _extract_name_from_history(history, user_message):
+        return True
+    if _JOIN_FLOW_RE.search(text) and len(text) < 120:
+        return True
+    last = _latest_assistant_text(history)
+    if _NAME_ASK_RE.search(last) and len(text) < 40:
+        return True
+    if any(
+        marker in last
+        for marker in ("Confirma o numero", "WhatsApp", "participar", "Prazer,")
+    ) and len(text) < 120:
+        return True
+    return len(history) <= 6
+
+
+def _off_topic_scope_reply(
+    history: list[dict[str, str]], user_message: str, onboarding_complete: bool
+) -> str | None:
+    """Bloqueia perguntas fora do fluxo SEM chamar OpenAI (economia de tokens)."""
+    if onboarding_complete:
+        return DEMO_FINISHED_MESSAGE
+    if _message_is_onboarding_flow(history, user_message):
+        return None
+    text = user_message.strip()
+    if _OFF_TOPIC_RE.search(text) or ("?" in text and len(text) > 25) or len(text) > 180:
+        return DEMO_SCOPE_ONLY_MESSAGE
+    return DEMO_SCOPE_ONLY_MESSAGE
 
 
 def _build_system_prompt(
@@ -309,8 +354,8 @@ Stack desta demo: conversa conduzida por OpenAI; acoes no WhatsApp executadas pe
 Contexto: informacao sobre IA, MCP e comunicacao inteligente existe demais, tempo pra acompanhar
 tudo e que falta. O Tech News leva as principais novidades sobre isso direto pro WhatsApp da pessoa.
 
-Objetivo: conversar de forma calorosa, explicar o beneficio do grupo de novidades Tech no WhatsApp
-e, quando o visitante quiser participar, usar as tools MCP Z-API (nao invente acoes).
+Objetivo: conduzir o visitante pelo fluxo da demo (nome → interesse → WhatsApp confirmado)
+e usar as tools MCP Z-API quando fizer sentido. A unica novidade desta demo e Z-API + MCP Server.
 
 Fluxo sugerido:
 1. O site ja mandou as boas-vindas, o aviso de privacidade (LGPD) e perguntou o primeiro nome da
@@ -333,12 +378,14 @@ Contexto fixo:
 
 Regras:
 - Responda sempre em portugues do Brasil, frases curtas, tom profissional e amigavel.
+- NUNCA responda perguntas abertas sobre IA, MCP, tecnologia ou assuntos fora desta demo.
+  Redirecione gentilmente para o fluxo: informar nome, confirmar interesse e WhatsApp com DDI.
 - Ao usar uma tool, diga na resposta final o que fez (ex.: "Enviei convite no WhatsApp").
 - Se uma tool falhar, explique em linguagem simples e sugira tentar de novo.
 - Nao peca dados sensiveis alem do primeiro nome e do telefone WhatsApp para este demo.
 - Ao repetir o numero do visitante na conversa, use formato mascarado (ex.: 5544***9999) — nunca todos os digitos.
 - Para sair do grupo ou encerrar a demo, o visitante diz "quero sair do grupo" — o backend envia link de confirmacao no WhatsApp (igual a entrada) e so remove apos o clique. Nunca invente remocao.
-{"- Onboarding ja concluido: o visitante entrou no grupo pessoal acima. Nao repita convite/link. Se perguntarem o proximo passo, diga para abrir o WhatsApp e ver a novidade; depois pode tirar duvidas sobre IA, MCP ou a demo." if onboarding_complete else ""}"""
+{"- Onboarding ja concluido: o visitante entrou no grupo pessoal acima. Nao repita convite/link. Diga para abrir o WhatsApp e ver a novidade Z-API + MCP. Nao responda outras perguntas no chat." if onboarding_complete else ""}"""
 
 
 def _tool_result_text(mcp_result: Any) -> str:
@@ -376,6 +423,13 @@ async def run_chat_turn(
         quick = _post_onboarding_quick_reply(user_message)
         if quick:
             return ChatTurnResult(reply=quick, tools_used=[])
+        scope = _off_topic_scope_reply(history, user_message, onboarding_complete=True)
+        if scope:
+            return ChatTurnResult(reply=scope, tools_used=[])
+
+    scope = _off_topic_scope_reply(history, user_message, onboarding_complete=False)
+    if scope:
+        return ChatTurnResult(reply=scope, tools_used=[])
 
     personal_group_line = ""
     if onboarding_complete:
@@ -409,8 +463,8 @@ async def run_chat_turn(
                 messages=messages,
                 tools=MCP_OPENAI_TOOLS,
                 tool_choice="auto",
-                temperature=0.4,
-                max_tokens=800,
+                temperature=0.3,
+                max_tokens=450,
             )
         except Exception:
             logger.exception("Falha OpenAI no chat publico")
@@ -473,6 +527,6 @@ async def run_chat_turn(
         return ChatTurnResult(reply=reply, tools_used=tools_used)
 
     return ChatTurnResult(
-        reply="Fiz varias acoes no WhatsApp via MCP. Veja seu celular — posso ajudar em mais alguma coisa?",
+        reply="Conclui as acoes no WhatsApp via MCP. Veja seu celular e confira a novidade no grupo.",
         tools_used=tools_used,
     )
