@@ -12,13 +12,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from app import mcp_client
 from app.admin_api import router as admin_router
 from app.chat_api import router as chat_router
+from app.config import NEWS_ASSETS_DIR
 from app.db import init_models
+from app.news_assets_api import router as news_assets_router
 from app.webhook import router as webhook_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -31,6 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.config import TURNSTILE_ENABLED
 
     await init_models()
+    NEWS_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     if not TURNSTILE_ENABLED:
         logging.getLogger("delega").warning(
             "Turnstile desativado (defina NEXT_PUBLIC_TURNSTILE_SITE_KEY + TURNSTILE_SECRET_KEY em producao)."
@@ -42,11 +45,26 @@ app = FastAPI(title="DELEGA - Gestao de Grupo de WhatsApp com Consentimento", li
 app.include_router(webhook_router)
 app.include_router(admin_router)
 app.include_router(chat_router)
+app.include_router(news_assets_router)
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/assets/news/{filename}")
+async def serve_news_asset(filename: str) -> FileResponse:
+    """PNG publico para Z-API `send-image` via URL (evita 413 com base64 no MCP)."""
+    if not filename.endswith(".png") or filename.count(".") != 1:
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    stem = filename[:-4]
+    if not stem or not all(ch.isalnum() or ch in "-_" for ch in stem):
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    path = NEWS_ASSETS_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Nao encontrado")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/tools-usage")

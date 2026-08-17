@@ -18,7 +18,7 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 
-from app.config import NEWS_ASSETS_DIR, OPENAI_API_KEY, OPENAI_MODEL
+from app.config import NEWS_ASSETS_DIR, OPENAI_API_KEY, OPENAI_MODEL, PUBLIC_BASE_URL
 
 logger = logging.getLogger("delega.ai")
 
@@ -103,9 +103,63 @@ async def interpret_confirmation(texto: str) -> Confirmation:
 _IMAGE_MODEL = "gpt-image-2"
 
 
+def _sanitize_news_id(news_id: str) -> str:
+    return "".join(ch for ch in news_id if ch.isalnum() or ch in "-_")
+
+
 def _news_image_path(news_id: str) -> Path:
-    safe_id = "".join(ch for ch in news_id if ch.isalnum() or ch in "-_")
-    return NEWS_ASSETS_DIR / f"{safe_id}.png"
+    return NEWS_ASSETS_DIR / f"{_sanitize_news_id(news_id)}.png"
+
+
+def news_image_public_url(news_id: str) -> str:
+    """URL publica servida por GET /assets/news/{id}.png — Z-API send-image aceita link."""
+    return f"{PUBLIC_BASE_URL}/assets/news/{_sanitize_news_id(news_id)}.png"
+
+
+async def ensure_news_image_file(news_id: str, prompt: str) -> bool:
+    """Garante PNG no disco (cache local ou geracao OpenAI)."""
+    path = _news_image_path(news_id)
+    if path.is_file():
+        logger.info("Imagem da noticia %s carregada do cache (%s)", news_id, path)
+        return True
+
+    b64 = await _generate_image_base64(prompt)
+    if b64 is None:
+        return False
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(b64))
+        logger.info("Imagem da noticia %s gerada e salva em %s", news_id, path)
+        return True
+    except OSError:
+        logger.exception("Falha ao salvar cache da imagem %s em %s", news_id, path)
+        return False
+
+
+async def resolve_news_image_url(news_id: str, prompt: str) -> str | None:
+    """Retorna URL publica da imagem se existir ou puder ser gerada."""
+    if await ensure_news_image_file(news_id, prompt):
+        return news_image_public_url(news_id)
+    return None
+
+
+async def save_news_image_bytes(news_id: str, content: bytes) -> Path:
+    """Persiste PNG enviado manualmente (upload)."""
+    if len(content) > 5 * 1024 * 1024:
+        raise ValueError("Imagem maior que 5 MB")
+    path = _news_image_path(news_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    logger.info("Imagem da noticia %s salva via upload em %s (%d bytes)", news_id, path, len(content))
+    return path
+
+
+async def get_cached_news_image_base64(news_id: str, prompt: str) -> str | None:
+    """Legado — preferir `resolve_news_image_url` (evita 413 no MCP com base64 grande)."""
+    if not await ensure_news_image_file(news_id, prompt):
+        return None
+    return base64.b64encode(_news_image_path(news_id).read_bytes()).decode("ascii")
 
 
 async def _generate_image_base64(prompt: str) -> str | None:
@@ -126,28 +180,8 @@ async def _generate_image_base64(prompt: str) -> str | None:
         return None
 
 
-async def get_cached_news_image_base64(news_id: str, prompt: str) -> str | None:
-    """Retorna base64 da imagem da noticia — le do disco ou gera uma vez e salva."""
-    path = _news_image_path(news_id)
-    if path.is_file():
-        logger.info("Imagem da noticia %s carregada do cache (%s)", news_id, path)
-        return base64.b64encode(path.read_bytes()).decode("ascii")
-
-    b64 = await _generate_image_base64(prompt)
-    if b64 is None:
-        return None
-
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(base64.b64decode(b64))
-        logger.info("Imagem da noticia %s gerada e salva em %s", news_id, path)
-    except OSError:
-        logger.exception("Falha ao salvar cache da imagem %s em %s", news_id, path)
-    return b64
-
-
 async def generate_promo_image_base64() -> str | None:
-    """Compatibilidade — preferir `get_cached_news_image_base64` com id da noticia."""
+    """Compatibilidade — preferir `resolve_news_image_url`."""
     from app.news_content import DEFAULT_GROUP_NEWS
 
     return await get_cached_news_image_base64(DEFAULT_GROUP_NEWS.id, DEFAULT_GROUP_NEWS.image_prompt)

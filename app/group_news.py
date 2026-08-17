@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from app import mcp_client
-from app.ai import get_cached_news_image_base64
+from app.ai import resolve_news_image_url
 from app.news_content import DEFAULT_GROUP_NEWS
 
 logger = logging.getLogger("delega.group_news")
@@ -20,26 +20,33 @@ async def send_group_news(group_id: str) -> list[str]:
     news = DEFAULT_GROUP_NEWS
     tools_used: list[str] = []
 
-    image_b64 = await get_cached_news_image_base64(news.id, news.image_prompt)
-    if image_b64 is not None:
+    image_url = await resolve_news_image_url(news.id, news.image_prompt)
+
+    if image_url is not None:
         try:
             result = await mcp_client.call_tool(
                 "send-image",
-                {"phone": group_id, "image": image_b64},
+                {"phone": group_id, "image": image_url},
             )
             if mcp_client.tool_call_succeeded(result):
                 tools_used.append("send-image")
+                logger.info("send-image noticia %s via URL %s", news.id, image_url)
             else:
                 logger.warning(
-                    "send-image recusou noticia %s no grupo %s: %r",
+                    "send-image recusou noticia %s no grupo %s (url=%s): %r",
                     news.id,
                     group_id,
+                    image_url,
                     result,
                 )
         except Exception:
-            logger.exception("Falha send-image da noticia no grupo %s", group_id)
+            logger.exception("Falha send-image da noticia no grupo %s url=%s", group_id, image_url)
     else:
-        logger.warning("Falha ao obter imagem da noticia %s — so legenda via send-text.", news.id)
+        logger.warning(
+            "Sem imagem da noticia %s — envie via POST /api/news-assets/%s ou aguarde geracao OpenAI.",
+            news.id,
+            news.id,
+        )
 
     try:
         result = await mcp_client.call_tool(
