@@ -34,7 +34,7 @@ Tokens MCP OAuth em `/mnt/api-zapi-desafio-hackathon/mcp_auth` (volume Docker).
 3. Receber **link de confirmação** no WhatsApp (`send-text` via MCP)
 4. Tocar no link → `/confirmar/{token}` → progresso no chat (criando grupo / adicionando / conteúdo)
 5. Polling `GET /api/chat/consent/{session_id}` (2s, só enquanto aguarda link/grupo/news) — retoma ao reabrir o chat; estados: `pending`, `creating_group`, `adding_participant`, `preparing_content`, `accepted`
-6. Ao concluir: **grupo pessoal** `Tech News IA & MCP #NNN` (admin da instancia + 1 participante) via `group-create` + `group-add-participant`; `send-text` de boas-vindas no DM; primeira news no grupo via `send-image` (imagem cacheada em `data/news_assets/`).
+6. Ao concluir: **grupo pessoal** `Tech News IA & MCP #NNN` (admin da instancia + 1 participante) via `group-create` + `group-add-participant`; `send-text` de boas-vindas no DM; primeira news no grupo via `send-image` (sem legenda) + `send-text` (legenda); imagem cacheada em `data/news_assets/` (OpenAI `gpt-image-2`, 1024×1024).
 
 Sessão do browser: UUID em `localStorage` (`delega_chat_session`) — cookie não é obrigatório.
 Estado do link: SQLite (`chat_consent_sessions`), sem Redis.

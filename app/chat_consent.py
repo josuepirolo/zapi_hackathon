@@ -183,7 +183,7 @@ async def _finish_returning_member(
     await session.commit()
 
     await _send_group_access_dm(prior.phone, prior.whatsapp_group_id, prior.group_name)
-    await send_group_news(prior.whatsapp_group_id)
+    news_tools = await send_group_news(prior.whatsapp_group_id)
 
     record.status = ChatLinkStatus.ACCEPTED
     record.accepted_at = now
@@ -197,7 +197,8 @@ async def _finish_returning_member(
         kind,
     )
     reply = _returning_member_chat_message(prior, kind)
-    return True, reply, ["group-metadata", "send-text", "send-image"], "accepted"
+    tools = ["group-metadata", "send-text", *news_tools]
+    return True, reply, tools, "accepted"
 
 
 async def _create_personal_group(
@@ -451,13 +452,15 @@ def _accepted_message_for(record: ChatConsentSession) -> str:
 
 def record_tools_for_accept(record: ChatConsentSession) -> list[str]:
     if record.existing_member_kind:
-        return ["send-text", "send-image"]
+        return ["group-metadata", "send-text", "send-image", "send-text"]
     return [
         "group-create",
         "group-metadata",
         "group-add-participant",
         "send-text",
+        "send-text",
         "send-image",
+        "send-text",
     ]
 
 
