@@ -1,7 +1,7 @@
 """Publicacao da novidade do dia no grupo via MCP.
 
-Envio em duas etapas (mais confiavel no WhatsApp): `send-image` (URL publica)
-depois `send-text` com o texto completo da noticia. Sem base64 no MCP (413).
+Texto via `send-text` (funciona). `send-image` desligado por ora - ver
+`NEWS_SEND_IMAGE_ENABLED` abaixo.
 """
 
 from __future__ import annotations
@@ -15,6 +15,16 @@ from app.ai import resolve_news_image_url
 from app.news_content import DEFAULT_GROUP_NEWS
 
 logger = logging.getLogger("delega.group_news")
+
+# `send-image` via MCP confirmado quebrado nesta instancia Z-API (2026-08-17):
+# testado ao vivo e exaustivamente (URL propria, URL externa conhecida,
+# grupo, numero direto, com/sem caption, base64 minusculo) - sempre "Request
+# failed with status code 400", enquanto `send-text` funciona normalmente na
+# mesma sessao/instancia. Payload confere com o schema live (`list_tools()`),
+# entao nao e erro nosso - bug/limitacao do lado da Z-API. Decisao do
+# usuario: noticia so em texto por enquanto. Reativar mudando este flag para
+# True se a Z-API corrigir.
+NEWS_SEND_IMAGE_ENABLED = False
 
 
 async def _verify_public_image_url(url: str) -> bool:
@@ -47,39 +57,40 @@ async def send_group_news(group_id: str) -> list[str]:
     news = DEFAULT_GROUP_NEWS
     tools_used: list[str] = []
 
-    image_url = await resolve_news_image_url(news.id, news.image_prompt)
+    if NEWS_SEND_IMAGE_ENABLED:
+        image_url = await resolve_news_image_url(news.id, news.image_prompt)
 
-    if image_url is None:
-        logger.warning(
-            "Sem imagem da noticia %s — envie via POST /api/news-assets/%s",
-            news.id,
-            news.id,
-        )
-    elif not await _verify_public_image_url(image_url):
-        logger.warning(
-            "send-image ignorado: URL da noticia %s nao respondeu 200 (%s)",
-            news.id,
-            image_url,
-        )
-    else:
-        try:
-            result = await mcp_client.call_tool(
-                "send-image",
-                {"phone": group_id, "image": image_url},
+        if image_url is None:
+            logger.warning(
+                "Sem imagem da noticia %s — envie via POST /api/news-assets/%s",
+                news.id,
+                news.id,
             )
-            if mcp_client.tool_call_succeeded(result):
-                tools_used.append("send-image")
-                logger.info("send-image noticia %s via URL %s", news.id, image_url)
-            else:
-                logger.warning(
-                    "send-image recusou noticia %s no grupo %s (url=%s): %r",
-                    news.id,
-                    group_id,
-                    image_url,
-                    result,
+        elif not await _verify_public_image_url(image_url):
+            logger.warning(
+                "send-image ignorado: URL da noticia %s nao respondeu 200 (%s)",
+                news.id,
+                image_url,
+            )
+        else:
+            try:
+                result = await mcp_client.call_tool(
+                    "send-image",
+                    {"phone": group_id, "image": image_url},
                 )
-        except Exception:
-            logger.exception("Falha send-image da noticia no grupo %s url=%s", group_id, image_url)
+                if mcp_client.tool_call_succeeded(result):
+                    tools_used.append("send-image")
+                    logger.info("send-image noticia %s via URL %s", news.id, image_url)
+                else:
+                    logger.warning(
+                        "send-image recusou noticia %s no grupo %s (url=%s): %r",
+                        news.id,
+                        group_id,
+                        image_url,
+                        result,
+                    )
+            except Exception:
+                logger.exception("Falha send-image da noticia no grupo %s url=%s", group_id, image_url)
 
     try:
         result = await mcp_client.call_tool(

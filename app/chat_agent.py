@@ -47,8 +47,10 @@ class ChatTurnResult:
     tools_used: list[str]
     consent_status: str = "none"
 
-# Schemas alinhados ao MCP Z-API (docs/zapi-mcp-capabilities.md).
-_MCP_OPENAI_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+# Fallback estatico (docs/zapi-mcp-capabilities.md) - usado SO se a
+# descoberta ao vivo via `tools/list` falhar (MCP fora do ar). Caminho
+# normal e `_get_openai_tools()`, que consulta o MCP de verdade.
+_FALLBACK_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -134,9 +136,41 @@ _CHAT_MCP_TOOL_NAMES = {
     "group-metadata",
     "group-add-participant",
 }
-MCP_OPENAI_TOOLS: list[dict[str, Any]] = [
-    tool for tool in _MCP_OPENAI_TOOL_DEFINITIONS if tool["function"]["name"] in _CHAT_MCP_TOOL_NAMES
+_FALLBACK_OPENAI_TOOLS: list[dict[str, Any]] = [
+    tool for tool in _FALLBACK_TOOL_DEFINITIONS if tool["function"]["name"] in _CHAT_MCP_TOOL_NAMES
 ]
+
+
+def _mcp_tool_to_openai_function(tool: dict[str, Any]) -> dict[str, Any]:
+    schema = dict(tool.get("input_schema") or {})
+    schema.pop("$schema", None)
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description") or "",
+            "parameters": schema,
+        },
+    }
+
+
+async def _get_openai_tools() -> list[dict[str, Any]]:
+    """Descoberta de tools genuinamente ao vivo via `tools/list` do MCP Z-API
+    (cache curto de 5min em `mcp_client.list_tools_cached` - so pra nao bater
+    no MCP a cada mensagem, a lista real e sempre a fonte). Cai pro schema
+    estatico (`_FALLBACK_OPENAI_TOOLS`) so se o MCP estiver inacessivel -
+    nunca e o caminho normal, so rede de seguranca."""
+    try:
+        live_tools = await mcp_client.list_tools_cached()
+        converted = [
+            _mcp_tool_to_openai_function(t) for t in live_tools if t.get("name") in _CHAT_MCP_TOOL_NAMES
+        ]
+        if converted:
+            return converted
+        logger.warning("tools/list nao retornou nenhuma tool do escopo do chat - usando fallback estatico")
+    except Exception:
+        logger.exception("Falha ao descobrir tools via MCP tools/list - usando fallback estatico")
+    return _FALLBACK_OPENAI_TOOLS
 
 
 async def _latest_campaign(session: AsyncSession) -> Campaign | None:
@@ -455,13 +489,14 @@ async def run_chat_turn(
     messages.append({"role": "user", "content": user_message})
 
     tools_used: list[str] = []
+    openai_tools = await _get_openai_tools()
 
     for _ in range(_MAX_TOOL_ROUNDS):
         try:
             completion = await _client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=messages,
-                tools=MCP_OPENAI_TOOLS,
+                tools=openai_tools,
                 tool_choice="auto",
                 temperature=0.3,
                 max_tokens=450,

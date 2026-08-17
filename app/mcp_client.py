@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import webbrowser
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -186,6 +187,28 @@ async def list_tools() -> list[dict[str, Any]]:
         return [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in result.tools]
 
     return await _with_retries("list_tools", _run)
+
+
+_TOOLS_CACHE_TTL_SECONDS = 300.0
+_tools_cache: list[dict[str, Any]] | None = None
+_tools_cache_at: float = 0.0
+
+
+async def list_tools_cached(ttl_seconds: float = _TOOLS_CACHE_TTL_SECONDS) -> list[dict[str, Any]]:
+    """`tools/list` real, com cache curto em memoria de processo.
+
+    Descoberta de tools genuinamente ao vivo (nao um schema hardcoded no
+    codigo do produto) - so evita bater no MCP a cada mensagem do chat, ja
+    que a lista de tools raramente muda dentro de uma mesma execucao do
+    servidor. `ttl_seconds=0` forca ignorar o cache."""
+    global _tools_cache, _tools_cache_at
+    now = time.monotonic()
+    if _tools_cache is not None and (now - _tools_cache_at) < ttl_seconds:
+        return _tools_cache
+    tools = await list_tools()
+    _tools_cache = tools
+    _tools_cache_at = now
+    return tools
 
 
 # As 9 tools confirmadas ao vivo (ver docs/zapi-mcp-capabilities.md) -
